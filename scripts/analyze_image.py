@@ -2,17 +2,20 @@ import cv2
 import numpy as np
 import sys
 import json
-import traceback
-from PIL import Image
-import logging
 import os
+import logging
+from datetime import datetime
 
 # Setup logging
+log_dir = '/home/mml_admin/2dto3d/logs'
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/home/mml_admin/2dto3d/logs/analysis.log'),
+        logging.FileHandler(os.path.join(log_dir, 'opencv_analysis.log')),
         logging.StreamHandler()
     ]
 )
@@ -32,10 +35,15 @@ def check_dependencies():
 
 def analyze_image(image_path):
     """Analyze image using OpenCV to determine object characteristics"""
+    logger.info(f"Starting analysis of image: {image_path}")
+    
     # Read image
     img = cv2.imread(image_path)
     if img is None:
+        logger.error(f"Could not read image: {image_path}")
         raise Exception("Could not read image")
+    
+    logger.info(f"Image loaded successfully. Size: {img.shape}")
     
     # Convert to grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -45,21 +53,27 @@ def analyze_image(image_path):
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     if not contours:
+        logger.error("No contours found in image")
         raise Exception("No contours found in image")
+    
+    logger.info(f"Found {len(contours)} contours")
     
     # Get the largest contour
     main_contour = max(contours, key=cv2.contourArea)
     
-    # Calculate basic properties
+    # Calculate properties
     area = cv2.contourArea(main_contour)
     perimeter = cv2.arcLength(main_contour, True)
     x, y, w, h = cv2.boundingRect(main_contour)
+    
+    logger.info(f"Main contour properties - Area: {area}, Perimeter: {perimeter}, Width: {w}, Height: {h}")
     
     # Calculate circularity
     circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
     
     # Determine shape type
     shape_type = "cylindrical" if 0.6 < h/w < 1.8 and circularity > 0.6 else "irregular"
+    logger.info(f"Detected shape type: {shape_type} (circularity: {circularity:.2f})")
     
     # Calculate average color
     mask = np.zeros(img.shape[:2], dtype=np.uint8)
@@ -88,6 +102,16 @@ def analyze_image(image_path):
             "symmetry": symmetry
         }
     }
+    
+    # Save debug images
+    debug_dir = os.path.join(os.path.dirname(image_path), 'debug')
+    if not os.path.exists(debug_dir):
+        os.makedirs(debug_dir)
+        
+    cv2.imwrite(os.path.join(debug_dir, 'contours.png'), thresh)
+    
+    logger.info("Analysis completed successfully")
+    logger.info(f"Analysis results: {json.dumps(analysis, indent=2)}")
     
     # Generate prompt based on analysis
     prompt = generate_3d_prompt(analysis)

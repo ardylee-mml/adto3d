@@ -5,6 +5,27 @@ import fs from 'fs';
 import { spawn } from 'child_process';
 import process from 'process';
 
+interface AnalysisResult {
+  dimensions: {
+    width: number;
+    height: number;
+    aspect_ratio: number;
+  };
+  complexity: {
+    edge_count: number;
+    contour_count: number;
+  };
+  color: {
+    average_rgb: number[];
+  };
+  shape: {
+    type: string;
+    circularity: number;
+    symmetry: string;
+  };
+  generated_prompt?: string;
+}
+
 const VM_BASE_PATH = '/home/mml_admin/2dto3d';
 
 export const config = {
@@ -33,22 +54,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log('Image received:', imageFile.filepath);
 
-    // Step 1: Analyze image
+    // Step 1: Analyze image with OpenCV
+    console.log('Starting OpenCV analysis...');
     const analysisProcess = spawn('python3', [
       path.join(process.cwd(), 'scripts', 'analyze_image.py'),
       imageFile.filepath
     ]);
 
-    const analysisResult = await new Promise((resolve, reject) => {
+    const analysisResult = await new Promise<string>((resolve, reject) => {
       let output = '';
-      analysisProcess.stdout.on('data', (data) => output += data);
+      let error = '';
+      
+      analysisProcess.stdout.on('data', (data) => {
+        output += data.toString();
+        console.log('OpenCV analysis output:', data.toString());
+      });
+      
+      analysisProcess.stderr.on('data', (data) => {
+        error += data.toString();
+        console.error('OpenCV analysis error:', data.toString());
+      });
+      
       analysisProcess.on('close', (code) => {
         if (code === 0) resolve(output);
-        else reject(new Error(`Analysis failed with code ${code}`));
+        else reject(new Error(`Analysis failed with code ${code}: ${error}`));
       });
     });
 
-    const analysis = JSON.parse(analysisResult);
+    const analysis = JSON.parse(analysisResult) as AnalysisResult;
+    console.log('OpenCV analysis completed:', analysis);
 
     // Step 2: Create 3D model using Blender
     const outputDir = path.join(VM_BASE_PATH, 'output');
@@ -56,7 +90,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const analysisPath = path.join(outputDir, `${path.basename(imageFile.filepath)}.json`);
     
     // Save analysis for Blender script
-    fs.writeFileSync(analysisPath, JSON.stringify(analysis));
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis, null, 2));
+    console.log('Analysis saved to:', analysisPath);
 
     const blenderProcess = spawn('blender', [
       '--background',
