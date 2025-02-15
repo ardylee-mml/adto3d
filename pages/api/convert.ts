@@ -1,42 +1,22 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
-import fs from 'fs';
 import path from 'path';
-import { exec, spawn } from 'child_process';
-import { promisify } from 'util';
+import fs from 'fs';
+import { spawn } from 'child_process';
 
-const execAsync = promisify(exec);
+const VM_BASE_PATH = '/home/mml_admin/2dto3d';
 
-// Disable the default body parser to handle form-data
 export const config = {
   api: {
     bodyParser: false,
   },
 };
 
-// Create temp directories if they don't exist
-const tempDir = path.join(process.cwd(), 'temp');
-const uploadsDir = path.join(tempDir, 'uploads');
-const outputDir = path.join(tempDir, 'output');
-
-[tempDir, uploadsDir, outputDir].forEach((dir) => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-});
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
+  console.log('Starting image analysis process');
+  
   try {
-    // Parse the incoming form data
-    const form = formidable({
-      uploadDir: uploadsDir,
-      keepExtensions: true,
-    });
-
+    const form = new formidable.IncomingForm();
     const [_fields, files] = await new Promise<[formidable.Fields, formidable.Files]>((resolve, reject) => {
       form.parse(req, (err, fields, files) => {
         if (err) reject(err);
@@ -46,98 +26,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const imageFile = Array.isArray(files.image) ? files.image[0] : files.image;
     if (!imageFile) {
+      console.error('No image file provided');
       return res.status(400).json({ error: 'No image file provided' });
     }
 
-    // Step 1: Remove background using Python script
-    const bgRemovedPath = path.join(outputDir, `bg_removed_${path.basename(imageFile.filepath)}`);
+    console.log('Image received:', imageFile.filepath);
+
+    // Run OpenCV analysis
+    const scriptPath = path.join(VM_BASE_PATH, 'scripts', 'analyze_image.py');
+    console.log('Running analysis script:', scriptPath);
+
+    const analysisProcess = spawn('python3', [scriptPath, imageFile.filepath]);
     
-    console.log('Starting background removal...');
-    await execAsync(`python3 -c "
-from rembg import remove
-from PIL import Image
-input_image = Image.open('${imageFile.filepath}')
-output_image = remove(input_image)
-output_image.save('${bgRemovedPath}')
-"`);
-    console.log('Background removal completed');
+    let outputData = '';
+    let errorData = '';
 
-    // Step 2: Convert to 3D using Blender
-    const outputPath = path.join(outputDir, `${path.basename(imageFile.filepath)}.glb`);
-    const blenderScriptPath = path.join(process.cwd(), 'scripts', 'convert_to_3d.py');
-
-    console.log('Starting Blender conversion...');
-    console.log('Input path:', bgRemovedPath);
-    console.log('Output path:', outputPath);
-    console.log('Blender script path:', blenderScriptPath);
-
-    // Update the Blender path for Linux
-    const blenderPath = 'blender'; // Linux uses the command directly
-
-    const blenderProcess = spawn(blenderPath, [
-      '--background',
-      '--python',
-      blenderScriptPath,
-      '--',
-      bgRemovedPath,
-      outputPath
-    ]);
-
-    let blenderOutput = '';
-    let blenderError = '';
-
-    blenderProcess.stdout.on('data', (data) => {
-      blenderOutput += data.toString();
-      console.log(`Blender stdout: ${data}`);
+    analysisProcess.stdout.on('data', (data) => {
+      outputData += data.toString();
+      console.log('Analysis output:', data.toString());
     });
 
-    blenderProcess.stderr.on('data', (data) => {
-      blenderError += data.toString();
-      console.error(`Blender stderr: ${data}`);
+    analysisProcess.stderr.on('data', (data) => {
+      errorData += data.toString();
+      console.error('Analysis error:', data.toString());
     });
 
-    await new Promise((resolve, reject) => {
-      blenderProcess.on('close', (code) => {
-        console.log('Blender process completed with code:', code);
-        console.log('Full Blender output:', blenderOutput);
-        console.log('Full Blender error:', blenderError);
-        
-        if (code === 0) resolve(null);
-        else reject(new Error(`Blender process exited with code ${code}`));
+    const analysisResult = await new Promise((resolve, reject) => {
+      analysisProcess.on('close', (code) => {
+        console.log(`Analysis process exited with code ${code}`);
+        if (code === 0) {
+          resolve(outputData);
+        } else {
+          reject(new Error(`Analysis failed with code ${code}: ${errorData}`));
+        }
       });
     });
 
-    // Check if the output file was created and has size
-    if (!fs.existsSync(outputPath)) {
-      throw new Error('Output file was not created');
-    }
+    // Parse and return the analysis results
+    const analysis = JSON.parse(analysisResult);
+    console.log('Analysis completed successfully');
 
-    const fileStats = fs.statSync(outputPath);
-    if (fileStats.size === 0) {
-      throw new Error('Output file is empty');
-    }
-
-    console.log('Conversion completed successfully');
-    console.log('Output file size:', fileStats.size);
-
-    // Copy the GLB file to the public directory for serving
-    const publicOutputDir = path.join(process.cwd(), 'public', 'output');
-    if (!fs.existsSync(publicOutputDir)) {
-      fs.mkdirSync(publicOutputDir, { recursive: true });
-    }
-
-    const publicOutputPath = path.join(publicOutputDir, path.basename(outputPath));
-    fs.copyFileSync(outputPath, publicOutputPath);
-
-    console.log('File copied to public directory:', publicOutputPath);
-
-    res.status(200).json({ 
+    res.status(200).json({
       success: true,
-      downloadUrl: `/output/${path.basename(outputPath)}`,
+      analysis: analysis,
+      prompt: analysis.generated_prompt
     });
 
   } catch (error) {
     console.error('Conversion error:', error);
-    res.status(500).json({ error: 'Error processing the image' });
+    res.status(500).json({ 
+      error: 'Analysis failed', 
+      details: error instanceof Error ? error.message : 'Unknown error' 
+    });
   }
 } 
