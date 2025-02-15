@@ -31,117 +31,115 @@ def check_dependencies():
         return False
 
 def analyze_image(image_path):
-    try:
-        logger.info(f"Starting image analysis for: {image_path}")
-        
-        # Verify image exists
-        if not os.path.exists(image_path):
-            raise Exception(f"Image file not found: {image_path}")
-        
-        # Load image with PIL first to verify it's valid
-        logger.info("Attempting to open image with PIL")
-        pil_image = Image.open(image_path)
-        logger.info(f"Image size: {pil_image.size}, mode: {pil_image.mode}")
-        
-        # Load with OpenCV
-        logger.info("Loading image with OpenCV")
-        img = cv2.imread(image_path)
-        if img is None:
-            raise Exception("Failed to load image with OpenCV")
-        
-        height, width = img.shape[:2]
-        logger.info(f"Image dimensions: {width}x{height}")
-        
-        # Color analysis
-        logger.info("Performing color analysis")
-        colors = cv2.mean(img)
-        dominant_color = np.mean(img.reshape(-1, 3), axis=0)
-        
-        # Edge detection
-        logger.info("Performing edge detection")
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 100, 200)
-        edge_count = cv2.countNonZero(edges)
-        logger.info(f"Found {edge_count} edge pixels")
-        
-        # Shape analysis
-        logger.info("Analyzing shape")
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        logger.info(f"Found {len(contours)} contours")
-        
-        analysis = {
-            "image_properties": {
-                "width": width,
-                "height": height,
-                "aspect_ratio": round(width/height, 2)
-            },
-            "color_analysis": {
-                "average_rgb": [round(colors[2]), round(colors[1]), round(colors[0])],
-                "dominant_rgb": [round(x) for x in dominant_color]
-            },
-            "complexity_analysis": {
-                "edge_count": edge_count,
-                "contour_count": len(contours)
-            }
+    """Analyze image using OpenCV to determine object characteristics"""
+    # Read image
+    img = cv2.imread(image_path)
+    if img is None:
+        raise Exception("Could not read image")
+    
+    # Convert to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Get contours
+    _, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        raise Exception("No contours found in image")
+    
+    # Get the largest contour
+    main_contour = max(contours, key=cv2.contourArea)
+    
+    # Calculate basic properties
+    area = cv2.contourArea(main_contour)
+    perimeter = cv2.arcLength(main_contour, True)
+    x, y, w, h = cv2.boundingRect(main_contour)
+    
+    # Calculate circularity
+    circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
+    
+    # Determine shape type
+    shape_type = "cylindrical" if 0.6 < h/w < 1.8 and circularity > 0.6 else "irregular"
+    
+    # Calculate average color
+    mask = np.zeros(img.shape[:2], dtype=np.uint8)
+    cv2.drawContours(mask, [main_contour], -1, (255), -1)
+    average_color = cv2.mean(img, mask=mask)[:3]
+    
+    # Analyze symmetry
+    symmetry = "symmetric" if analyze_symmetry(gray, main_contour) else "asymmetric"
+    
+    analysis = {
+        "dimensions": {
+            "width": w,
+            "height": h,
+            "aspect_ratio": h/w
+        },
+        "complexity": {
+            "edge_count": len(main_contour),
+            "contour_count": len(contours)
+        },
+        "color": {
+            "average_rgb": [int(c) for c in average_color]
+        },
+        "shape": {
+            "type": shape_type,
+            "circularity": circularity,
+            "symmetry": symmetry
         }
-        
-        if contours:
-            main_contour = max(contours, key=cv2.contourArea)
-            area = cv2.contourArea(main_contour)
-            perimeter = cv2.arcLength(main_contour, True)
-            circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
-            
-            analysis["shape_analysis"] = {
-                "type": "circular" if circularity > 0.8 else "rectangular" if circularity > 0.6 else "irregular",
-                "circularity": round(circularity, 2),
-                "area": round(area),
-                "perimeter": round(perimeter)
-            }
-            logger.info(f"Shape analysis completed: {analysis['shape_analysis']['type']}")
-        
-        # Generate prompt based on analysis
-        prompt = generate_prompt(analysis)
-        analysis["generated_prompt"] = prompt
-        
-        logger.info("Analysis completed successfully")
-        return json.dumps(analysis)
-
-    except Exception as e:
-        logger.error(f"Error during analysis: {str(e)}")
-        logger.error(traceback.format_exc())
-        return json.dumps({
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        })
-
-def generate_prompt(analysis):
-    """Generate a detailed prompt based on image analysis"""
-    shape_type = analysis.get("shape_analysis", {}).get("type", "unknown")
-    width = analysis["image_properties"]["width"]
-    height = analysis["image_properties"]["height"]
-    colors = analysis["color_analysis"]["dominant_rgb"]
+    }
     
-    prompt = f"Create a Roblox-style 3D model with these specifications:\n"
-    prompt += f"- Primary shape: {shape_type}\n"
-    prompt += f"- Proportions: {width}x{height} (scaled appropriately)\n"
-    prompt += f"- Main color: RGB({colors[0]}, {colors[1]}, {colors[2]})\n"
-    prompt += f"- Complexity: {'high' if analysis['complexity_analysis']['edge_count'] > 1000 else 'medium' if analysis['complexity_analysis']['edge_count'] > 500 else 'low'}\n"
+    # Generate prompt based on analysis
+    prompt = generate_3d_prompt(analysis)
+    analysis["generated_prompt"] = prompt
     
-    logger.info(f"Generated prompt: {prompt}")
-    return prompt
+    return analysis
+
+def analyze_symmetry(gray_img, contour):
+    """Analyze if the shape is roughly symmetrical"""
+    x, y, w, h = cv2.boundingRect(contour)
+    roi = gray_img[y:y+h, x:x+w]
+    
+    # Compare left and right halves
+    mid = w//2
+    left = roi[:, :mid]
+    right = cv2.flip(roi[:, -mid:], 1)
+    
+    if left.shape == right.shape:
+        diff = cv2.absdiff(left, right)
+        symmetry_score = 1 - (np.sum(diff) / (255 * diff.size))
+        return symmetry_score > 0.8
+    return False
+
+def generate_3d_prompt(analysis):
+    """Generate a prompt for 3D model creation based on analysis"""
+    shape_type = analysis["shape"]["type"]
+    height = analysis["dimensions"]["height"]
+    width = analysis["dimensions"]["width"]
+    symmetry = analysis["shape"]["symmetry"]
+    
+    base_prompt = f"Create a {shape_type} 3D model with "
+    
+    if shape_type == "cylindrical":
+        prompt = f"{base_prompt}height {height} units and diameter {width} units. "
+    else:
+        prompt = f"{base_prompt}height {height} units and width {width} units. "
+    
+    prompt += f"The object is {symmetry}. "
+    
+    if analysis["shape"]["circularity"] > 0.8:
+        prompt += "The cross-section should be circular. "
+    
+    return prompt.strip()
 
 if __name__ == "__main__":
-    try:
-        logger.info("Starting image analysis script")
-        if not check_dependencies():
-            sys.exit(1)
+    if len(sys.argv) != 2:
+        print("Usage: python analyze_image.py <image_path>")
+        sys.exit(1)
         
-        if len(sys.argv) > 1:
-            result = analyze_image(sys.argv[1])
-            print(result)
-        else:
-            logger.error("No input file provided")
-            print(json.dumps({"error": "No input file provided"}))
+    try:
+        analysis = analyze_image(sys.argv[1])
+        print(json.dumps(analysis))
     except Exception as e:
-        logger.error(f"Script error: {str(e)}")
-        logger.error(traceback.format_exc()) 
+        print(json.dumps({"error": str(e)}), file=sys.stderr)
+        sys.exit(1) 

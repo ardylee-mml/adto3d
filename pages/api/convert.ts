@@ -3,6 +3,7 @@ import formidable from 'formidable';
 import path from 'path';
 import fs from 'fs';
 import { spawn } from 'child_process';
+import process from 'process';
 
 const VM_BASE_PATH = '/home/mml_admin/2dto3d';
 
@@ -32,51 +33,74 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log('Image received:', imageFile.filepath);
 
-    // Run OpenCV analysis
-    const scriptPath = path.join(VM_BASE_PATH, 'scripts', 'analyze_image.py');
-    console.log('Running analysis script:', scriptPath);
-
-    const analysisProcess = spawn('python3', [scriptPath, imageFile.filepath]);
-    
-    let outputData = '';
-    let errorData = '';
-
-    analysisProcess.stdout.on('data', (data) => {
-      outputData += data.toString();
-      console.log('Analysis output:', data.toString());
-    });
-
-    analysisProcess.stderr.on('data', (data) => {
-      errorData += data.toString();
-      console.error('Analysis error:', data.toString());
-    });
+    // Step 1: Analyze image
+    const analysisProcess = spawn('python3', [
+      path.join(process.cwd(), 'scripts', 'analyze_image.py'),
+      imageFile.filepath
+    ]);
 
     const analysisResult = await new Promise((resolve, reject) => {
+      let output = '';
+      analysisProcess.stdout.on('data', (data) => output += data);
       analysisProcess.on('close', (code) => {
-        console.log(`Analysis process exited with code ${code}`);
+        if (code === 0) resolve(output);
+        else reject(new Error(`Analysis failed with code ${code}`));
+      });
+    });
+
+    const analysis = JSON.parse(analysisResult);
+
+    // Step 2: Create 3D model using Blender
+    const outputDir = path.join(VM_BASE_PATH, 'output');
+    const outputPath = path.join(outputDir, `${path.basename(imageFile.filepath)}.glb`);
+    const analysisPath = path.join(outputDir, `${path.basename(imageFile.filepath)}.json`);
+    
+    // Save analysis for Blender script
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis));
+
+    const blenderProcess = spawn('blender', [
+      '--background',
+      '--python',
+      path.join(process.cwd(), 'scripts', 'convert_to_3d.py'),
+      '--',
+      analysisPath,
+      outputPath
+    ]);
+
+    let blenderOutput = '';
+    let blenderError = '';
+
+    blenderProcess.stdout.on('data', (data) => {
+      blenderOutput += data.toString();
+      console.log('Blender output:', data.toString());
+    });
+
+    blenderProcess.stderr.on('data', (data) => {
+      blenderError += data.toString();
+      console.error('Blender error:', data.toString());
+    });
+
+    const blenderResult = await new Promise((resolve, reject) => {
+      blenderProcess.on('close', (code) => {
+        console.log(`Blender process exited with code ${code}`);
         if (code === 0) {
-          resolve(outputData);
+          resolve(blenderOutput);
         } else {
-          reject(new Error(`Analysis failed with code ${code}: ${errorData}`));
+          reject(new Error(`Blender failed with code ${code}: ${blenderError}`));
         }
       });
     });
 
-    // Parse and return the analysis results
-    const analysis = JSON.parse(analysisResult);
-    console.log('Analysis completed successfully');
+    console.log('Blender completed successfully');
 
     res.status(200).json({
       success: true,
       analysis: analysis,
-      prompt: analysis.generated_prompt
+      modelUrl: `/output/${path.basename(outputPath)}`,
     });
 
   } catch (error) {
     console.error('Conversion error:', error);
-    res.status(500).json({ 
-      error: 'Analysis failed', 
-      details: error instanceof Error ? error.message : 'Unknown error' 
-    });
+    res.status(500).json({ error: 'Error processing the image' });
   }
 } 
