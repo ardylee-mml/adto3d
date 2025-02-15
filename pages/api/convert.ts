@@ -38,8 +38,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   console.log('Starting image analysis process');
   
   try {
-    const form = new formidable.IncomingForm();
-    const [_fields, files] = await new Promise<[formidable.Fields, formidable.Files]>((resolve, reject) => {
+    const form = new formidable.IncomingForm({
+      uploadDir: path.join(VM_BASE_PATH, 'temp'),
+      keepExtensions: true,
+    });
+
+    const [fields, files] = await new Promise((resolve, reject) => {
       form.parse(req, (err, fields, files) => {
         if (err) reject(err);
         resolve([fields, files]);

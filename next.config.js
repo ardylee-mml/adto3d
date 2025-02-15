@@ -1,18 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  api: {
-    bodyParser: false,
-  },
   async rewrites() {
     return [
       {
         source: '/api/:path*',
-        destination: 'http://40.81.21.27:3000/api/:path*'  // Replace YOUR_VM_IP with your VM's public IP
+        destination: 'http://40.81.21.27:3000/api/:path*'
       },
       {
         source: '/output/:path*',
-        destination: '/api/files/:path*'  // We'll create this API route
+        destination: '/api/files/:path*'
       }
     ]
   },
