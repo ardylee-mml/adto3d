@@ -71,7 +71,10 @@ output_image.save('${bgRemovedPath}')
     console.log('Output path:', outputPath);
     console.log('Blender script path:', blenderScriptPath);
 
-    const blenderProcess = spawn(process.env.BLENDER_PATH!, [
+    // Update the Blender path for Linux
+    const blenderPath = 'blender'; // Linux uses the command directly
+
+    const blenderProcess = spawn(blenderPath, [
       '--background',
       '--python',
       blenderScriptPath,
