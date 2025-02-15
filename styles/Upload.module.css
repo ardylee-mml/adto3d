@@ -5,6 +5,8 @@
   justify-content: center;
   background-color: #f5f5f5;
   padding: 2rem;
+  max-width: 800px;
+  margin: 0 auto;
 }
 
 .card {
@@ -39,6 +41,7 @@
 .fileInput {
   position: relative;
   width: 100%;
+  margin-bottom: 20px;
 }
 
 .fileLabel {
@@ -219,4 +222,46 @@
   background-color: #fff;
   border-radius: 4px;
   overflow: hidden;
+}
+
+.uploadSection {
+  margin: 20px 0;
+  padding: 20px;
+  border: 2px dashed #ccc;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.previewContainer {
+  margin: 20px 0;
+}
+
+.preview {
+  max-width: 300px;
+  max-height: 300px;
+  object-fit: contain;
+}
+
+.uploadButton {
+  padding: 10px 20px;
+  background-color: #0070f3;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.uploadButton:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
+.error {
+  color: red;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid red;
+  border-radius: 4px;
+  background-color: #fff5f5;
 }

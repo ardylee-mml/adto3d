@@ -1,39 +1,68 @@
 import { useState } from "react";
-import axios from "axios";
 import styles from "../styles/Upload.module.css";
-import ModelViewer from "../components/ModelViewer";
+import ImageAnalysis from "../components/ImageAnalysis";
+
+interface AnalysisResult {
+  dimensions: {
+    width: number;
+    height: number;
+    aspect_ratio: number;
+  };
+  complexity: {
+    edge_count: number;
+    contour_count: number;
+  };
+  color: {
+    average_rgb: number[];
+  };
+  shape: {
+    type: string;
+    circularity: number;
+    symmetry: string;
+  };
+}
 
 export default function Upload() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string>("");
-  const [modelUrl, setModelUrl] = useState<string>("");
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
-      setPreview(URL.createObjectURL(e.target.files[0]));
-      setModelUrl("");
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+      setPreview(URL.createObjectURL(selectedFile));
+      setAnalysis(null);
+      setError("");
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleUpload = async () => {
     if (!file) return;
 
     setLoading(true);
     setError("");
 
-    const formData = new FormData();
-    formData.append("image", file);
-
     try {
-      const response = await axios.post("/api/convert", formData);
-      setModelUrl(response.data.downloadUrl);
+      const formData = new FormData();
+      formData.append("image", file);
+
+      const response = await fetch("/api/convert", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Upload failed");
+      }
+
+      setAnalysis(data.analysis);
     } catch (err) {
-      setError("Error converting image");
-      console.error(err);
+      setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setLoading(false);
     }
@@ -41,31 +70,34 @@ export default function Upload() {
 
   return (
     <div className={styles.container}>
-      <form onSubmit={handleSubmit} className={styles.form}>
+      <h1>2D to 3D Converter</h1>
+
+      <div className={styles.uploadSection}>
         <input
           type="file"
           accept="image/*"
           onChange={handleFileChange}
-          className={styles.input}
+          className={styles.fileInput}
         />
-        {preview && (
-          <img src={preview} alt="Preview" className={styles.preview} />
-        )}
-        <button type="submit" disabled={!file || loading}>
-          {loading ? "Converting..." : "Convert to 3D"}
-        </button>
-        {error && <p className={styles.error}>{error}</p>}
-      </form>
 
-      {modelUrl && (
-        <div className={styles.result}>
-          <h3>3D Model Preview</h3>
-          <ModelViewer modelUrl={modelUrl} />
-          <a href={modelUrl} download className={styles.download}>
-            Download 3D Model
-          </a>
-        </div>
-      )}
+        {preview && (
+          <div className={styles.previewContainer}>
+            <img src={preview} alt="Preview" className={styles.preview} />
+          </div>
+        )}
+
+        <button
+          onClick={handleUpload}
+          disabled={!file || loading}
+          className={styles.uploadButton}
+        >
+          {loading ? "Processing..." : "Analyze Image"}
+        </button>
+      </div>
+
+      {error && <div className={styles.error}>{error}</div>}
+
+      {analysis && <ImageAnalysis analysis={analysis} />}
     </div>
   );
 }
