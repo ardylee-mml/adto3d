@@ -12,7 +12,7 @@ const nextConfig = {
       },
       {
         source: '/output/:path*',
-        destination: '/temp/output/:path*'
+        destination: '/api/files/:path*'  // We'll create this API route
       }
     ]
   },
