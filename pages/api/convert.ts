@@ -5,6 +5,12 @@ import fs from 'fs';
 import { spawn } from 'child_process';
 import process from 'process';
 
+// Add type definitions for formidable
+type FormidableParseReturn = {
+  fields: formidable.Fields;
+  files: formidable.Files;
+};
+
 interface AnalysisResult {
   dimensions: {
     width: number;
@@ -43,10 +49,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       keepExtensions: true,
     });
 
-    const [fields, files] = await new Promise((resolve, reject) => {
+    // Fix the type error with proper typing
+    const { fields, files } = await new Promise<FormidableParseReturn>((resolve, reject) => {
       form.parse(req, (err, fields, files) => {
         if (err) reject(err);
-        resolve([fields, files]);
+        resolve({ fields, files });
       });
     });
 
