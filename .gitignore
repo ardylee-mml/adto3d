@@ -1,5 +1,34 @@
-node_modules/
-.next/
-temp/
-.env
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js
+/.next/
+/out/
+
+# Production
+/build
+
+# Misc
 .DS_Store
+*.pem
+.env*
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local files
+/temp
+/public/output
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
