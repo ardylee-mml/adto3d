@@ -4,142 +4,111 @@ import sys
 import os
 import math
 
+# Set color management
+scene = bpy.context.scene
+scene.view_settings.view_transform = 'Standard'
+scene.display_settings.display_device = 'sRGB'
+
 def load_analysis(json_path):
     with open(json_path, 'r') as f:
         return json.load(f)
 
 def create_3d_model(analysis, image_path, output_path):
+    print(f"Creating 3D model with analysis: {analysis}")
+    print(f"Using image: {image_path}")
+    print(f"Output path: {output_path}")
+
     # Clear existing objects
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete()
 
-    # Create a cylinder for the can
+    # Create a cylinder for the can/box
     if analysis['shape']['type'] == 'cylindrical':
+        print("Creating cylindrical object...")
         # Create cylinder
         bpy.ops.mesh.primitive_cylinder_add(
             radius=1.0,
             depth=2.0,
             segments=32
         )
-        can = bpy.context.active_object
-
-        # Scale the cylinder based on image dimensions
-        height = analysis['dimensions']['height'] / 100
-        diameter = analysis['dimensions']['width'] / (100 * math.pi)  # Adjust for circumference
-        can.scale = (diameter, diameter, height)
-
-        # Smooth the cylinder
-        bpy.ops.object.shade_smooth()
-        
-        # Add edge split modifier for sharp edges
-        edge_split = can.modifiers.new(name="Edge Split", type='EDGE_SPLIT')
-        edge_split.split_angle = math.radians(30)
     else:
-        # Fallback to plane for non-cylindrical objects
-        bpy.ops.mesh.primitive_plane_add(size=1)
-        can = bpy.context.active_object
-        can.scale.x = analysis['dimensions']['width'] / 100
-        can.scale.y = analysis['dimensions']['height'] / 100
+        print("Creating box object...")
+        # Create a box for non-cylindrical objects
+        bpy.ops.mesh.primitive_cube_add(size=1.0)
 
-    # Add material
-    mat = bpy.data.materials.new(name="CanMaterial")
-    mat.use_nodes = True
-    nodes = mat.node_tree.nodes
-    links = mat.node_tree.links
+    obj = bpy.context.active_object
     
-    # Clear default nodes
-    nodes.clear()
-    
-    # Create nodes
-    principled = nodes.new('ShaderNodeBsdfPrincipled')
-    output = nodes.new('ShaderNodeOutputMaterial')
-    
-    # Add image texture
+    # Set dimensions based on analysis
+    width = analysis['dimensions']['width'] / 100
+    height = analysis['dimensions']['height'] / 100
+    obj.scale = (width, width, height)
+
+    print(f"Applied dimensions: width={width}, height={height}")
+
+    # Add material and texture
     try:
-        if os.path.exists(image_path):
-            print(f"Loading image from: {image_path}")
-            tex_image = nodes.new('ShaderNodeTexImage')
-            tex_image.image = bpy.data.images.load(image_path)
-            
-            # Add mapping nodes for proper cylinder unwrap
-            mapping = nodes.new('ShaderNodeMapping')
-            tex_coord = nodes.new('ShaderNodeTexCoord')
-            
-            # Link nodes
-            links.new(tex_coord.outputs['UV'], mapping.inputs['Vector'])
-            links.new(mapping.outputs['Vector'], tex_image.inputs['Vector'])
-            links.new(tex_image.outputs['Color'], principled.inputs['Base Color'])
-            
-            # Adjust mapping for cylinder
-            if analysis['shape']['type'] == 'cylindrical':
-                mapping.inputs['Scale'].default_value[0] = 1.0
-                mapping.inputs['Scale'].default_value[1] = 2.0
+        mat = bpy.data.materials.new(name="ObjectMaterial")
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        
+        # Add image texture
+        tex_image = nodes.new('ShaderNodeTexImage')
+        tex_image.image = bpy.data.images.load(image_path)
+        
+        # Link texture to material
+        principled = nodes.get('Principled BSDF')
+        mat.node_tree.links.new(tex_image.outputs['Color'], principled.inputs['Base Color'])
+        
+        # Assign material to object
+        if obj.data.materials:
+            obj.data.materials[0] = mat
         else:
-            print(f"Image not found at: {image_path}, using fallback color")
-            rgb = analysis['color']['average_rgb']
-            principled.inputs['Base Color'].default_value = (rgb[0]/255, rgb[1]/255, rgb[2]/255, 1)
+            obj.data.materials.append(mat)
+            
+        print("Successfully applied material and texture")
     except Exception as e:
-        print(f"Error loading texture: {e}")
-        rgb = analysis['color']['average_rgb']
-        principled.inputs['Base Color'].default_value = (rgb[0]/255, rgb[1]/255, rgb[2]/255, 1)
-
-    # Link output
-    links.new(principled.outputs['BSDF'], output.inputs['Surface'])
-    
-    # Assign material
-    if can.data.materials:
-        can.data.materials[0] = mat
-    else:
-        can.data.materials.append(mat)
-
-    # Set up UV mapping
-    bpy.context.view_layer.objects.active = can
-    bpy.ops.object.mode_set(mode='EDIT')
-    if analysis['shape']['type'] == 'cylindrical':
-        bpy.ops.uv.cylinder_project(scale_to_bounds=True)
-    else:
-        bpy.ops.uv.unwrap(method='ANGLE_BASED', margin=0.001)
-    bpy.ops.object.mode_set(mode='OBJECT')
+        print(f"Error applying material: {str(e)}")
 
     # Export as GLB
     try:
         bpy.ops.export_scene.gltf(
             filepath=output_path,
             export_format='GLB',
-            use_selection=False,
-            export_materials=True,
-            export_colors=True,
-            export_image_format='AUTO'
+            use_selection=False
         )
-        print(f"Successfully exported to: {output_path}")
+        print(f"Successfully exported model to: {output_path}")
     except Exception as e:
         print(f"Export error: {str(e)}")
-        try:
-            bpy.ops.export_scene.gltf(
-                filepath=output_path,
-                export_format='GLB'
-            )
-            print(f"Successfully exported with basic settings to: {output_path}")
-        except Exception as e2:
-            print(f"Alternative export also failed: {str(e2)}")
-            raise
 
 def main():
-    if len(sys.argv) < 5:
-        print("Usage: blender --background --python script.py -- <json_path> <output_path>")
+    # Get command line arguments
+    args = sys.argv[sys.argv.index("--") + 1:]
+    if len(args) < 2:
+        print("Error: Missing required arguments")
         sys.exit(1)
 
-    json_path = sys.argv[-2]
-    output_path = sys.argv[-1]
-    image_path = json_path.replace('.json', '').replace('/output/', '/uploads/')
-    
-    print(f"Using image path: {image_path}")
-    
+    analysis_path = args[0]
+    output_path = args[1]
+
+    # Check if analysis file exists
+    if not os.path.exists(analysis_path):
+        print(f"Error: Analysis file not found at {analysis_path}")
+        sys.exit(1)
+
     try:
-        analysis = load_analysis(json_path)
-        create_3d_model(analysis, image_path, output_path)
+        with open(analysis_path, 'r') as f:
+            analysis = json.load(f)
     except Exception as e:
-        print(f"Error during model creation: {str(e)}")
+        print(f"Error reading analysis file: {e}")
+        sys.exit(1)
+
+    # Your 3D generation logic here
+    # ...
+
+    try:
+        bpy.ops.wm.save_as_mainfile(filepath=output_path)
+    except Exception as e:
+        print(f"Error saving output file: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

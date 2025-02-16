@@ -111,10 +111,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       referenceImagePath: imageFile.filepath
     });
 
+    console.log('Generated model path:', modelPath);
     res.status(200).json({
       success: true,
       analysis: analysis,
-      modelUrl: modelPath,
+      modelUrl: `/temp/output/${modelPath}`,
       aiDescription: modelInstructions
     });
 

@@ -58,7 +58,7 @@ export default function Home() {
 
       const data = await response.json();
       if (data.success) {
-        console.log('Conversion successful, model URL:', data.modelUrl);
+        console.log('Full response data:', data);
         setModelUrl(data.modelUrl);
         setAnalysis(data.analysis);
       } else {
@@ -152,7 +152,7 @@ export default function Home() {
             <div className="mt-8">
               <h2 className="text-2xl font-bold mb-4">3D Model Preview</h2>
               <div className="model-viewer-container">
-                <ModelViewer modelUrl={modelUrl} />
+                <ModelViewer modelPath={modelUrl} />
               </div>
             </div>
           )}
