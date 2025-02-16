@@ -1,0 +1,24 @@
+{
+  "dimensions": {
+    "width": 1024,
+    "height": 768,
+    "aspect_ratio": 0.75
+  },
+  "complexity": {
+    "edge_count": 4,
+    "contour_count": 1
+  },
+  "color": {
+    "average_rgb": [
+      188,
+      206,
+      192
+    ]
+  },
+  "shape": {
+    "type": "cylindrical",
+    "circularity": 0.7693337914875781,
+    "symmetry": "symmetric"
+  },
+  "generated_prompt": "Create a cylindrical 3D model with height 768 units and diameter 1024 units. The object is symmetric."
+}

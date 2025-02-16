@@ -1,0 +1,24 @@
+{
+  "dimensions": {
+    "width": 890,
+    "height": 768,
+    "aspect_ratio": 0.8629213483146068
+  },
+  "complexity": {
+    "edge_count": 1168,
+    "contour_count": 183
+  },
+  "color": {
+    "average_rgb": [
+      232,
+      185,
+      192
+    ]
+  },
+  "shape": {
+    "type": "irregular",
+    "circularity": 0.14271408184342313,
+    "symmetry": "asymmetric"
+  },
+  "generated_prompt": "Create a irregular 3D model with height 768 units and width 890 units. The object is asymmetric."
+}

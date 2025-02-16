@@ -1,9 +1,12 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
+import { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
 import path from 'path';
 import fs from 'fs';
 import { spawn } from 'child_process';
 import process from 'process';
+import { generateAI3DModel } from '../../utils/ai3dGenerator';
+import { generate3DModel } from '../../services/3dGeneration';
+import { performOpenCVAnalysis } from '../../utils/openCVAnalysis';
 
 // Add type definitions for formidable
 type FormidableParseReturn = {
@@ -29,11 +32,27 @@ interface AnalysisResult {
     circularity: number;
     symmetry: string;
   };
-  generated_prompt?: string;
+  object_detection: {
+    class: string;
+    confidence: number;
+    category: string;
+    subcategory?: string;
+    attributes?: {
+      material?: string;
+      style?: string;
+      features?: string[];
+    };
+  };
+  generated_prompt: string;
+  ai_generation?: {
+    description: string;
+    timestamp: string;
+  };
 }
 
 const VM_BASE_PATH = '/home/mml_admin/2dto3d';
 
+// Disable the default body parser to handle form data
 export const config = {
   api: {
     bodyParser: false,
@@ -41,19 +60,23 @@ export const config = {
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  console.log('Starting image analysis process');
-  
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  let analysis: AnalysisResult | null = null;  // Declare analysis at the top
+
   try {
-    const form = new formidable.IncomingForm({
-      uploadDir: path.join(VM_BASE_PATH, 'temp'),
+    const form = formidable({
+      uploadDir: path.join(process.cwd(), 'temp', 'uploads'),
       keepExtensions: true,
     });
 
-    // Fix the type error with proper typing
-    const { fields, files } = await new Promise<FormidableParseReturn>((resolve, reject) => {
+    // Parse the form using a Promise wrapper
+    const [_, files] = await new Promise<[formidable.Fields, formidable.Files]>((resolve, reject) => {
       form.parse(req, (err, fields, files) => {
         if (err) reject(err);
-        resolve({ fields, files });
+        resolve([fields, files]);
       });
     });
 
@@ -65,88 +88,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log('Image received:', imageFile.filepath);
 
-    // Step 1: Analyze image with OpenCV
-    console.log('Starting OpenCV analysis...');
-    const analysisProcess = spawn('python3', [
-      path.join(process.cwd(), 'scripts', 'analyze_image.py'),
-      imageFile.filepath
-    ]);
+    // Step 1: OpenCV Analysis
+    const analysis = await performOpenCVAnalysis(imageFile.filepath);
 
-    const analysisResult = await new Promise<string>((resolve, reject) => {
-      let output = '';
-      let error = '';
-      
-      analysisProcess.stdout.on('data', (data) => {
-        output += data.toString();
-        console.log('OpenCV analysis output:', data.toString());
-      });
-      
-      analysisProcess.stderr.on('data', (data) => {
-        error += data.toString();
-        console.error('OpenCV analysis error:', data.toString());
-      });
-      
-      analysisProcess.on('close', (code) => {
-        if (code === 0) resolve(output);
-        else reject(new Error(`Analysis failed with code ${code}: ${error}`));
-      });
+    // Step 2: AI Understanding & 3D Instructions
+    const modelInstructions = await generateAI3DModel({
+      shape: analysis.shape.type,
+      color: analysis.color.average_rgb,
+      dimensions: analysis.dimensions,
+      style: 'detailed',
+      imagePath: imageFile.filepath
     });
 
-    const analysis = JSON.parse(analysisResult) as AnalysisResult;
-    console.log('OpenCV analysis completed:', analysis);
-
-    // Step 2: Create 3D model using Blender
-    const outputDir = path.join(VM_BASE_PATH, 'output');
-    const outputPath = path.join(outputDir, `${path.basename(imageFile.filepath)}.glb`);
-    const analysisPath = path.join(outputDir, `${path.basename(imageFile.filepath)}.json`);
-    
-    // Save analysis for Blender script
-    fs.writeFileSync(analysisPath, JSON.stringify(analysis, null, 2));
-    console.log('Analysis saved to:', analysisPath);
-
-    const blenderProcess = spawn('blender', [
-      '--background',
-      '--python',
-      path.join(process.cwd(), 'scripts', 'convert_to_3d.py'),
-      '--',
-      analysisPath,
-      outputPath
-    ]);
-
-    let blenderOutput = '';
-    let blenderError = '';
-
-    blenderProcess.stdout.on('data', (data) => {
-      blenderOutput += data.toString();
-      console.log('Blender output:', data.toString());
+    // Step 3: Generate 3D Model using AI
+    const modelPath = await generate3DModel({
+      imageDescription: modelInstructions,
+      shapeAnalysis: {
+        type: analysis.shape.type,
+        dimensions: analysis.dimensions,
+        symmetry: analysis.shape.symmetry
+      },
+      referenceImagePath: imageFile.filepath
     });
-
-    blenderProcess.stderr.on('data', (data) => {
-      blenderError += data.toString();
-      console.error('Blender error:', data.toString());
-    });
-
-    const blenderResult = await new Promise((resolve, reject) => {
-      blenderProcess.on('close', (code) => {
-        console.log(`Blender process exited with code ${code}`);
-        if (code === 0) {
-          resolve(blenderOutput);
-        } else {
-          reject(new Error(`Blender failed with code ${code}: ${blenderError}`));
-        }
-      });
-    });
-
-    console.log('Blender completed successfully');
 
     res.status(200).json({
       success: true,
       analysis: analysis,
-      modelUrl: `/output/${path.basename(outputPath)}`,
+      modelUrl: modelPath,
+      aiDescription: modelInstructions
     });
 
   } catch (error) {
     console.error('Conversion error:', error);
-    res.status(500).json({ error: 'Error processing the image' });
+    res.status(500).json({ error: 'Internal server error during conversion' });
   }
 } 

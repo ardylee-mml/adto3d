@@ -2,10 +2,17 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import path from 'path';
 import fs from 'fs';
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+export const config = {
+  api: {
+    responseLimit: false,
+    bodyParser: false,
+  },
+};
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const filePath = Array.isArray(req.query.path) 
-      ? req.query.path.join('/') 
+    const filePath = Array.isArray(req.query.path)
+      ? req.query.path.join('/')
       : req.query.path;
 
     if (!filePath) {
@@ -13,15 +20,17 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const fullPath = path.join(process.cwd(), 'temp', 'output', filePath);
-    console.log('Attempting to serve file:', fullPath);
 
-    if (fs.existsSync(fullPath)) {
-      const fileStream = fs.createReadStream(fullPath);
-      res.setHeader('Content-Type', 'model/gltf-binary');
-      fileStream.pipe(res);
-    } else {
-      res.status(404).json({ error: 'File not found' });
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).json({ error: 'File not found' });
     }
+
+    res.setHeader('Content-Type', 'model/gltf-binary');
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
+
+    const fileContent = fs.readFileSync(fullPath);
+    res.send(fileContent);
+
   } catch (error) {
     console.error('File serving error:', error);
     res.status(500).json({ error: 'Internal server error' });
