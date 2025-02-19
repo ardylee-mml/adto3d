@@ -5,12 +5,8 @@ const nextConfig = {
   async rewrites() {
     return [
       {
-        source: '/api/:path*',
-        destination: 'http://localhost:3001/api/:path*'  // Keep API route
-      },
-      {
-        source: '/temp/output/:filename*',
-        destination: '/api/files/:filename*'  // File serving route
+        source: '/temp/output/:path*',
+        destination: '/temp/output/:path*'
       }
     ];
   },
@@ -31,7 +27,17 @@ const nextConfig = {
   // Remove webpack configuration temporarily
   webpack: (config) => {
     return config;
-  }
+  },
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'storage.googleapis.com',
+        port: '',
+        pathname: '/processors-bucket.masterpiecex.com/**',
+      },
+    ],
+  },
 };
 
 module.exports = nextConfig; 
