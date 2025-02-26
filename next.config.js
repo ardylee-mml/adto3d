@@ -7,6 +7,10 @@ const nextConfig = {
       {
         source: '/temp/output/:path*',
         destination: '/temp/output/:path*'
+      },
+      {
+        source: '/api/files/uploads/:path*',
+        destination: '/api/files/uploads/:path*',
       }
     ];
   },
@@ -36,6 +40,10 @@ const nextConfig = {
         port: '',
         pathname: '/processors-bucket.masterpiecex.com/**',
       },
+    ],
+    domains: [
+      'storage.googleapis.com',
+      process.env.NEXT_PUBLIC_VERCEL_URL || 'localhost',
     ],
   },
 };

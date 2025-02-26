@@ -1,0 +1,24 @@
+.error-message {
+    color: #ff4444;
+    margin-top: 8px;
+}
+
+.valid-message {
+    color: #44aa44;
+    margin-top: 8px;
+}
+
+.file-info {
+    margin-top: 16px;
+}
+
+.filename-input {
+    margin-top: 16px;
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+
+.filename-input.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}

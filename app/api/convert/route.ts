@@ -7,19 +7,12 @@ export async function POST(req: NextRequest) {
     console.log('Received conversion request');
     try {
         const formData = await req.formData();
-        console.log('Parsed form data');
         const file = formData.get('file') as File;
         const fileName = formData.get('fileName') as string;
-
-        console.log('Received file:', {
-            fileName,
-            fileSize: file?.size,
-            fileType: file?.type,
-            fileKeys: Object.keys(file || {})
-        });
+        const isOutfit = formData.get('isOutfit') === 'true';
+        const outfitType = formData.get('outfitType') as string | null;
 
         if (!file || !fileName) {
-            console.log('Missing required fields');
             return NextResponse.json({
                 success: false,
                 error: 'File and fileName are required'
@@ -27,128 +20,91 @@ export async function POST(req: NextRequest) {
         }
 
         // Save uploaded file temporarily
-        const outputDir = path.join(process.cwd(), 'temp', 'output');
-        console.log('Creating output directory:', outputDir);
-        fs.mkdirSync(outputDir, { recursive: true });
+        const uploadsDir = path.join(process.cwd(), 'temp', 'uploads');
+        fs.mkdirSync(uploadsDir, { recursive: true });
+        const filePath = path.join(uploadsDir, file.name);
 
-        const filePath = path.join(outputDir, file.name || 'uploaded_file.png');
-        console.log('Saving file to:', filePath);
+        const bytes = await file.arrayBuffer();
+        fs.writeFileSync(filePath, Buffer.from(bytes));
 
-        // Convert file to buffer and save
-        try {
-            if (!file.arrayBuffer) {
-                throw new Error('File object does not have arrayBuffer method');
-            }
-            const bytes = await file.arrayBuffer();
-            fs.writeFileSync(filePath, Buffer.from(bytes));
-            console.log('File saved successfully');
-        } catch (error) {
-            console.error('Error saving file:', error);
-            return NextResponse.json({
-                success: false,
-                error: `Error saving file: ${error.message}`
-            }, { status: 500 });
-        }
-
-        // Verify Python script exists
-        const scriptPath = path.join(process.cwd(), 'scripts', 'convert_image.py');
-        if (!fs.existsSync(scriptPath)) {
-            console.error('Python script not found:', scriptPath);
-            return NextResponse.json({
-                success: false,
-                error: 'Conversion script not found'
-            }, { status: 500 });
-        }
-
-        console.log('Starting Python conversion...', {
-            scriptPath,
-            filePath,
-            fileName
-        });
-
-        // Run the working Python conversion script
-        return new Promise((resolve, reject) => {
+        // Run Python script with outfit parameters
+        return new Promise((resolve) => {
             const pythonProcess = spawn('python3', [
-                scriptPath,
+                path.join(process.cwd(), 'scripts', 'convert_image.py'),
                 filePath,
-                fileName
+                fileName,
+                isOutfit ? 'true' : 'false',
+                outfitType || ''
             ]);
 
             let outputData = '';
             let errorData = '';
 
             pythonProcess.stdout.on('data', (data) => {
-                const output = data.toString();
-                console.log('Python stdout:', output);
-                outputData += output;
-
-                // Try to parse progress updates
-                try {
-                    const lines = output.split('\n');
-                    for (const line of lines) {
-                        if (line.trim()) {
-                            const data = JSON.parse(line);
-                            if (data.type === 'progress') {
-                                // Send progress to client (if using WebSocket/SSE)
-                                console.log('Progress:', {
-                                    stage: data.stage,
-                                    progress: data.progress,
-                                    message: data.message
-                                });
-                            }
-                        }
-                    }
-                } catch (e) {
-                    // Not a JSON line, ignore
-                }
+                console.log('Python stdout:', data.toString());
+                outputData += data.toString();
             });
 
             pythonProcess.stderr.on('data', (data) => {
-                const error = data.toString();
-                console.error('Python stderr:', error);
-                errorData += error;
+                console.error('Python stderr:', data.toString());
+                errorData += data.toString();
             });
 
             pythonProcess.on('close', (code) => {
-                console.log('Python process closed with code:', code);
-                if (code === 0) {
-                    try {
-                        // Find the last complete JSON object that starts with {"success":
-                        const jsonMatch = outputData.match(/\{"success":.*\}/s);
-                        if (!jsonMatch) {
-                            console.error('No valid JSON found in output:', outputData);
-                            throw new Error('No valid JSON output found');
-                        }
-
-                        const result = JSON.parse(jsonMatch[0]);
-                        console.log('Parsed result:', result);
-
-                        // Verify the format
-                        if (!result.success || !result.outputs) {
-                            console.error('Invalid result format:', result);
-                            throw new Error('Invalid result format from conversion script');
-                        }
-
-                        // Clean up the temporary file
-                        try {
-                            fs.unlinkSync(filePath);
-                        } catch (e) {
-                            console.error('Error cleaning up file:', e);
-                        }
-
-                        resolve(NextResponse.json(result));
-                    } catch (e) {
-                        console.error('Failed to parse Python output:', e, '\nOutput:', outputData);
-                        reject(new Error('Invalid output from conversion script'));
-                    }
-                } else {
-                    reject(new Error(`Conversion failed: ${errorData}`));
+                // Clean up uploaded file
+                try {
+                    fs.unlinkSync(filePath);
+                } catch (e) {
+                    console.error('Error cleaning up file:', e);
                 }
-            });
 
-            pythonProcess.on('error', (err) => {
-                console.error('Failed to start Python process:', err);
-                reject(new Error('Failed to start conversion process'));
+                try {
+                    // Get the last line of output which should be our JSON
+                    const lines = outputData.trim().split('\n');
+                    const lastLine = lines[lines.length - 1];
+                    const result = JSON.parse(lastLine);
+
+                    console.log('Parsed result:', result);
+
+                    if (result.success) {
+                        const basePath = path.join(process.cwd(), 'temp', 'output', fileName);
+                        const files = [
+                            `${fileName}.glb`,
+                            isOutfit ? `${fileName}_processed.fbx` : `${fileName}.fbx`,
+                            `${fileName}.usdz`,
+                            `${fileName}_preview.png`
+                        ];
+
+                        // Check if files exist
+                        const missingFiles = files.filter(file =>
+                            !fs.existsSync(path.join(basePath, file))
+                        );
+
+                        if (missingFiles.length > 0) {
+                            console.error('Missing files:', missingFiles);
+                            resolve(NextResponse.json({
+                                success: false,
+                                error: 'Processing failed',
+                                details: `Missing files: ${missingFiles.join(', ')}`
+                            }, { status: 500 }));
+                            return;
+                        }
+
+                        // If processing succeeded, return the result
+                        resolve(NextResponse.json(result));
+                    } else {
+                        resolve(NextResponse.json(result, { status: 400 }));
+                    }
+                } catch (e) {
+                    console.error('Error parsing output:', e);
+                    console.error('Raw output:', outputData);
+                    console.error('Error output:', errorData);
+                    resolve(NextResponse.json({
+                        success: false,
+                        error: 'Failed to process output',
+                        details: errorData || outputData
+                    }, { status: 500 }));
+                }
             });
         });
     } catch (error) {

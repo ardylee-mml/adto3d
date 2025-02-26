@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, ChangeEvent, useEffect } from 'react';
 import { 
   Box, 
   Button, 
@@ -13,28 +13,48 @@ import {
   Step,
   StepLabel,
   Alert,
-  LinearProgress
+  LinearProgress,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  DialogContentText 
 } from '@mui/material';
 import Image from 'next/image';
 import ModelViewer from './ModelViewer';
 import ModelEditor from './ModelEditor';
 
 interface ModelUrls {
-  glb?: string;
-  fbx?: string;
-  usdz?: string;
-  thumbnail?: string;
+  glb: string;
+  fbx: string;
+  usdz: string;
+  thumbnail: string;
 }
 
 interface ConversionStatus {
-  stage: 'idle' | 'uploading' | 'processing' | 'complete' | 'error';
+  stage: 'idle' | 'uploading' | 'converting' | 'processing' | 'complete' | 'error';
   progress: number;
   message: string;
 }
 
+// Add new interface for outfit types
+interface OutfitType {
+  isOutfit: boolean;
+  type: 'clothes' | 'hats' | 'shoes' | null;
+}
+
 export default function ImageUploader() {
-  const [file, setFile] = useState<File | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState('');
+  const [isValidating, setIsValidating] = useState(false);
+  const [imageValidation, setImageValidation] = useState<{
+    isValid: boolean;
+    message: string | null;
+  }>({
+    isValid: false,
+    message: null
+  });
+  const [isLoading, setIsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modelUrls, setModelUrls] = useState<ModelUrls | null>(null);
@@ -44,11 +64,54 @@ export default function ImageUploader() {
     message: 'Ready to convert'
   });
   const [isEditing, setIsEditing] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  // Add new state for outfit type
+  const [outfitType, setOutfitType] = useState<OutfitType>({
+    isOutfit: false,
+    type: null
+  });
+  const [processingStatus, setProcessingStatus] = useState<string>('');
+  // Add new state for dialog
+  const [showDownloadReminder, setShowDownloadReminder] = useState(false);
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files && event.target.files[0]) {
-      setFile(event.target.files[0]);
-      setError(null);
+  const handleFileSelect = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setSelectedFile(file);
+    setImageValidation({ isValid: false, message: null });
+    setIsValidating(true);
+    setError(null);
+
+    // Create form data for validation
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch('/api/validate-image', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const result = await response.json();
+
+      setImageValidation({
+        isValid: result.success,
+        message: result.message
+      });
+
+      if (!result.success) {
+        setError(result.message || 'Image validation failed');
+      }
+    } catch (error) {
+      setImageValidation({
+        isValid: false,
+        message: 'Error validating image'
+      });
+      setError('Error validating image');
+      console.error('Validation error:', error);
+    } finally {
+      setIsValidating(false);
     }
   };
 
@@ -57,15 +120,16 @@ export default function ImageUploader() {
     setError(null);
   };
 
-  const handleUpload = async () => {
-    if (!file) {
-      setError('Please select a file');
-      return;
-    }
-    if (!fileName) {
-      setError('Please enter a file name');
-      return;
-    }
+  const isValidModelUrls = (data: any): data is ModelUrls => {
+    return data && 
+      typeof data.glb === 'string' && 
+      typeof data.fbx === 'string' && 
+      typeof data.usdz === 'string' && 
+      typeof data.thumbnail === 'string';
+  };
+
+  const handleConvert = async () => {
+    if (!selectedFile || !fileName) return;
 
     setLoading(true);
     setError(null);
@@ -78,8 +142,12 @@ export default function ImageUploader() {
 
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('file', selectedFile);
       formData.append('fileName', fileName);
+      formData.append('isOutfit', outfitType.isOutfit.toString());
+      if (outfitType.isOutfit && outfitType.type) {
+        formData.append('outfitType', outfitType.type);
+      }
 
       const response = await fetch('/api/convert', {
         method: 'POST',
@@ -87,33 +155,100 @@ export default function ImageUploader() {
       });
 
       const data = await response.json();
-      console.log('Response data:', data);
+      console.log('Conversion response:', data);
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Conversion failed');
+      if (!data.success) {
+        throw new Error(data.error || data.message || 'Conversion failed');
       }
 
-      if (data.success && data.outputs) {
+      // If this is an outfit, show processing status
+      if (outfitType.isOutfit) {
         setStatus({
-          stage: 'complete',
-          progress: 100,
-          message: 'Conversion complete!'
+          stage: 'processing',
+          progress: 75,
+          message: 'Processing for Roblox...'
         });
-        setModelUrls(data.outputs);
-      } else {
-        console.log('Invalid data format:', data);
-        throw new Error('Invalid response format');
+        setProcessingStatus('Adjusting 3D model for Roblox...');
       }
+
+      // Verify files are accessible
+      const fileUrls = data.outputs;
+      for (const url of Object.values(fileUrls)) {
+        const testResponse = await fetch(url as string);
+        if (!testResponse.ok) {
+          throw new Error(`Failed to access file: ${url}`);
+        }
+      }
+
+      setStatus({
+        stage: 'complete',
+        progress: 100,
+        message: data.message || 'Conversion complete!'
+      });
+      setModelUrls(data.outputs);
+      setProcessingStatus('');
     } catch (err) {
-      console.error('Upload error:', err);
+      console.error('Conversion error:', err);
       setError(err instanceof Error ? err.message : 'An error occurred');
       setStatus({
         stage: 'error',
         progress: 0,
-        message: 'Conversion failed'
+        message: err instanceof Error ? err.message : 'Conversion failed'
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Add effect to handle preview when modelUrls changes
+  useEffect(() => {
+    if (modelUrls?.glb) {
+      // Verify the GLB file is accessible
+      fetch(modelUrls.glb)
+        .then(response => {
+          if (response.ok) {
+            setPreviewUrl(modelUrls.glb);
+          } else {
+            console.error('Failed to load GLB file');
+            setError('Failed to load 3D preview');
+          }
+        })
+        .catch(err => {
+          console.error('Error loading GLB file:', err);
+          setError('Failed to load 3D preview');
+        });
+    }
+  }, [modelUrls]);
+
+  // Add validation for enabling Convert button
+  const isConvertEnabled = () => {
+    if (!selectedFile || !fileName || !imageValidation.isValid) return false;
+    if (outfitType.isOutfit && !outfitType.type) return false;
+    return true;
+  };
+
+  // Add reset function
+  const resetConverter = () => {
+    setSelectedFile(null);
+    setFileName('');
+    setImageValidation({ isValid: false, message: null });
+    setError(null);
+    setModelUrls(null);
+    setStatus({
+      stage: 'idle',
+      progress: 0,
+      message: 'Ready to convert'
+    });
+    setOutfitType({ isOutfit: false, type: null });
+    setProcessingStatus('');
+  };
+
+  // Add handler for starting new conversion
+  const handleNewConversion = () => {
+    if (modelUrls) {
+      setShowDownloadReminder(true);
+    } else {
+      resetConverter();
     }
   };
 
@@ -150,50 +285,117 @@ export default function ImageUploader() {
               <Typography variant="h6" gutterBottom>
                 Input
               </Typography>
-              
+
+              {/* File Selection */}
               <Box sx={{ mb: 3 }}>
                 <Button
                   variant="contained"
                   component="label"
                   fullWidth
-                  sx={{ mb: 2 }}
+                  disabled={loading}
                 >
                   Select Image
                   <input
                     type="file"
                     hidden
                     accept="image/*"
-                    onChange={handleFileChange}
+                    onChange={handleFileSelect}
                   />
                 </Button>
-                {file && (
-                  <Alert severity="success" sx={{ mb: 2 }}>
-                    Selected: {file.name}
-                  </Alert>
+                {selectedFile && (
+                  <Box sx={{ mt: 1 }}>
+                    <Typography variant="body2">
+                      Selected: {selectedFile.name}
+                    </Typography>
+                    {isValidating ? (
+                      <Typography variant="body2" color="primary">
+                        Validating image...
+                      </Typography>
+                    ) : imageValidation.message && (
+                      <Typography 
+                        variant="body2" 
+                        color={imageValidation.isValid ? "success.main" : "error"}
+                      >
+                        {imageValidation.message}
+                      </Typography>
+                    )}
+                  </Box>
                 )}
               </Box>
 
-              <TextField
-                fullWidth
-                label="Output File Name"
-                value={fileName}
-                onChange={handleFileNameChange}
-                sx={{ mb: 3 }}
-                helperText="This name will be used for the converted files"
-              />
+              {/* Output Filename */}
+              <Box sx={{ mb: 3 }}>
+                <TextField
+                  fullWidth
+                  label="Output Filename"
+                  value={fileName}
+                  onChange={handleFileNameChange}
+                  disabled={loading}
+                  error={!!error}
+                  helperText={error || "Enter name for output files"}
+                />
+              </Box>
 
+              {/* Image Type Selection */}
+              <Box sx={{ mb: 3 }}>
+                <Typography variant="subtitle1" gutterBottom>
+                  Image Type
+                </Typography>
+                <Box sx={{ mb: 2 }}>
+                  <Button
+                    variant={outfitType.isOutfit ? "contained" : "outlined"}
+                    onClick={() => setOutfitType({ isOutfit: true, type: null })}
+                    sx={{ mr: 1 }}
+                    disabled={loading}
+                  >
+                    Outfit
+                  </Button>
+                  <Button
+                    variant={!outfitType.isOutfit ? "contained" : "outlined"}
+                    onClick={() => setOutfitType({ isOutfit: false, type: null })}
+                    disabled={loading}
+                  >
+                    Other
+                  </Button>
+                </Box>
+
+                {outfitType.isOutfit && (
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Outfit Type
+                    </Typography>
+                    <Grid container spacing={1}>
+                      {['clothes', 'hats', 'shoes'].map((type) => (
+                        <Grid item xs={4} key={type}>
+                          <Button
+                            fullWidth
+                            variant={outfitType.type === type ? "contained" : "outlined"}
+                            onClick={() => setOutfitType({ ...outfitType, type: type as OutfitType['type'] })}
+                            disabled={loading}
+                          >
+                            {type.charAt(0).toUpperCase() + type.slice(1)}
+                          </Button>
+                        </Grid>
+                      ))}
+                    </Grid>
+                  </Box>
+                )}
+              </Box>
+
+              {/* Convert Button */}
               <Button
                 variant="contained"
-                onClick={handleUpload}
-                disabled={loading || !file || !fileName}
+                color="primary"
                 fullWidth
-                sx={{ mb: 3 }}
+                onClick={handleConvert}
+                disabled={!isConvertEnabled() || loading}
               >
                 {loading ? <CircularProgress size={24} /> : 'Convert to 3D'}
               </Button>
 
+              {/* Status and Progress */}
               {status.stage !== 'idle' && (
-                <Box sx={{ mb: 3 }}>
+                <Box sx={{ mt: 3 }}>
                   <LinearProgress 
                     variant="determinate" 
                     value={status.progress} 
@@ -205,13 +407,16 @@ export default function ImageUploader() {
                   >
                     {status.message}
                   </Typography>
+                  {processingStatus && (
+                    <Typography 
+                      variant="body2" 
+                      color="primary" 
+                      sx={{ mt: 1 }}
+                    >
+                      {processingStatus}
+                    </Typography>
+                  )}
                 </Box>
-              )}
-
-              {error && (
-                <Alert severity="error" sx={{ mb: 3 }}>
-                  {error}
-                </Alert>
               )}
             </Paper>
           </Grid>
@@ -223,35 +428,27 @@ export default function ImageUploader() {
                   Results
                 </Typography>
 
-                <Box sx={{ mb: 4 }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                    <Typography variant="subtitle1">
-                      3D Preview
-                    </Typography>
-                    <Button 
-                      variant="outlined"
-                      onClick={() => setIsEditing(!isEditing)}
-                    >
-                      {isEditing ? 'Exit Editor' : 'Edit Model'}
-                    </Button>
-                  </Box>
-                  {isEditing ? (
-                    <ModelEditor glbUrl={modelUrls.glb} />
-                  ) : (
-                    <ModelViewer glbUrl={modelUrls.glb} />
-                  )}
+                {/* Add New Conversion Button at the top */}
+                <Box sx={{ mb: 3 }}>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    onClick={handleNewConversion}
+                    fullWidth
+                  >
+                    Convert New Image
+                  </Button>
                 </Box>
 
                 <Box sx={{ mb: 4 }}>
                   <Typography variant="subtitle1" gutterBottom>
-                    Thumbnail
+                    3D Preview
                   </Typography>
-                  <Image
-                    src={modelUrls.thumbnail}
-                    alt="3D Model Preview"
-                    width={400}
-                    height={400}
-                    style={{ objectFit: 'contain' }}
+                  <ModelViewer 
+                    glbUrl={modelUrls.glb}
+                    fbxUrl={modelUrls.fbx}
+                    isOutfit={outfitType.isOutfit}
+                    outfitType={outfitType.type || undefined}
                   />
                 </Box>
 
@@ -260,69 +457,18 @@ export default function ImageUploader() {
                     Download Files
                   </Typography>
                   <Grid container spacing={2}>
-                    {modelUrls.glb && (
-                      <Grid item xs={12} sm={4}>
-                        <Button 
-                          href={modelUrls.glb} 
-                          target="_blank" 
-                          variant="contained"
+                    {Object.entries(modelUrls).map(([format, url]) => (
+                      <Grid item xs={6} sm={3} key={format}>
+                        <Button
+                          variant="outlined"
                           fullWidth
-                          sx={{
-                            background: 'linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)',
-                            color: 'white',
-                            boxShadow: '0 3px 5px 2px rgba(33, 203, 243, .3)',
-                            '&:hover': {
-                              background: 'linear-gradient(45deg, #1976D2 30%, #00BCD4 90%)',
-                            }
-                          }}
-                          download={`${fileName}.glb`}
+                          href={url}
+                          download
                         >
-                          Download GLB
+                          Download {format.toUpperCase()}
                         </Button>
                       </Grid>
-                    )}
-                    {modelUrls.fbx && (
-                      <Grid item xs={12} sm={4}>
-                        <Button 
-                          href={modelUrls.fbx} 
-                          target="_blank" 
-                          variant="contained"
-                          fullWidth
-                          sx={{
-                            background: 'linear-gradient(45deg, #4CAF50 30%, #8BC34A 90%)',
-                            color: 'white',
-                            boxShadow: '0 3px 5px 2px rgba(139, 195, 74, .3)',
-                            '&:hover': {
-                              background: 'linear-gradient(45deg, #388E3C 30%, #689F38 90%)',
-                            }
-                          }}
-                          download={`${fileName}.fbx`}
-                        >
-                          Download FBX
-                        </Button>
-                      </Grid>
-                    )}
-                    {modelUrls.usdz && (
-                      <Grid item xs={12} sm={4}>
-                        <Button 
-                          href={modelUrls.usdz} 
-                          target="_blank" 
-                          variant="contained"
-                          fullWidth
-                          sx={{
-                            background: 'linear-gradient(45deg, #FF9800 30%, #FFC107 90%)',
-                            color: 'white',
-                            boxShadow: '0 3px 5px 2px rgba(255, 193, 7, .3)',
-                            '&:hover': {
-                              background: 'linear-gradient(45deg, #F57C00 30%, #FFB300 90%)',
-                            }
-                          }}
-                          download={`${fileName}.usdz`}
-                        >
-                          Download USDZ
-                        </Button>
-                      </Grid>
-                    )}
+                    ))}
                   </Grid>
                 </Box>
               </Paper>
@@ -331,21 +477,54 @@ export default function ImageUploader() {
                 elevation={2} 
                 sx={{ 
                   p: 2, 
-                  height: '100%', 
+                  height: '400px', 
                   display: 'flex', 
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  bgcolor: 'grey.100'
+                  alignItems: 'center', 
+                  justifyContent: 'center' 
                 }}
               >
-                <Typography variant="h6" color="text.secondary">
-                  Convert an image to see the 3D preview here
+                <Typography variant="body1" color="textSecondary">
+                  3D preview will appear here
                 </Typography>
               </Paper>
             )}
           </Grid>
         </Grid>
       </Paper>
+
+      {/* Add Download Reminder Dialog */}
+      <Dialog
+        open={showDownloadReminder}
+        onClose={() => setShowDownloadReminder(false)}
+      >
+        <DialogTitle>
+          Download Your Files
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Please make sure to download all your converted files before starting a new conversion.
+            The current files will be removed when you start a new conversion.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button 
+            onClick={() => setShowDownloadReminder(false)}
+            color="primary"
+          >
+            Go Back
+          </Button>
+          <Button
+            onClick={() => {
+              setShowDownloadReminder(false);
+              resetConverter();
+            }}
+            color="primary"
+            variant="contained"
+          >
+            Continue Anyway
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 } 
