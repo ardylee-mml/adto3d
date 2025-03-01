@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, useGLTF, Stage } from '@react-three/drei';
 import { Box, CircularProgress, Typography, ButtonGroup, Button } from '@mui/material';
+import React from 'react';
 
 function Model({ url }: { url: string }) {
   const [error, setError] = useState<string | null>(null);
@@ -51,72 +52,25 @@ export default function ModelViewer({
       });
   }, [glbUrl]);
 
-  return (
-    <Box>
-      {isOutfit && (
-        <Box sx={{ mb: 2 }}>
-          <ButtonGroup>
-            <Button
-              variant={viewMode === 'original' ? 'contained' : 'outlined'}
-              onClick={() => setViewMode('original')}
-            >
-              Original
-            </Button>
-            <Button
-              variant={viewMode === 'processed' ? 'contained' : 'outlined'}
-              onClick={() => setViewMode('processed')}
-            >
-              Processed for Roblox
-            </Button>
-          </ButtonGroup>
-        </Box>
-      )}
-      
-      <Box
-        ref={containerRef}
-        sx={{
-          width: '100%',
-          height: '400px',
-          position: 'relative',
-          backgroundColor: '#f5f5f5',
-          borderRadius: '8px',
-          overflow: 'hidden',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center'
-        }}
-      >
-        {loading ? (
-          <CircularProgress />
-        ) : error ? (
-          <Typography color="error">{error}</Typography>
-        ) : (
-          <Canvas
-            camera={{ position: [0, 0, 5], fov: 50 }}
-            style={{ width: '100%', height: '100%' }}
-          >
-            <Stage environment="city" intensity={0.5}>
-              <Model url={glbUrl} />
-            </Stage>
-            <OrbitControls
-              autoRotate
-              autoRotateSpeed={2}
-              enableZoom={true}
-              enablePan={true}
-              minDistance={2}
-              maxDistance={10}
-            />
-          </Canvas>
-        )}
-      </Box>
-      
-      {isOutfit && (
-        <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
-          {viewMode === 'processed' 
-            ? `Processed for Roblox (${outfitType})` 
-            : 'Original Masterpiece conversion'}
-        </Typography>
-      )}
-    </Box>
+  const boxStyles = {
+    width: '100%',
+    height: '400px',
+    position: 'relative',
+    bgcolor: '#f5f5f5',
+    borderRadius: '8px'
+  } as const;
+
+  return React.createElement(Box, { sx: boxStyles }, 
+    React.createElement(Canvas, 
+      { 
+        camera: { position: [0, 0, 5], fov: 50 },
+        style: { width: '100%', height: '100%' },
+        children: [
+          React.createElement(Stage, { environment: "city", intensity: 0.5, key: "stage" }),
+          React.createElement(Model, { url: glbUrl, key: "model" }),
+          React.createElement(OrbitControls, { makeDefault: true, key: "controls" })
+        ]
+      }
+    )
   );
 } 

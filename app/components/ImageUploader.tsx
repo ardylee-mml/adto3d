@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, ChangeEvent, useEffect } from 'react';
+import React, { useState, ChangeEvent, useEffect } from 'react';
 import { 
   Box, 
   Button, 
@@ -24,11 +24,10 @@ import Image from 'next/image';
 import ModelViewer from './ModelViewer';
 import ModelEditor from './ModelEditor';
 
-interface ModelUrls {
-  glb: string;
-  fbx: string;
-  usdz: string;
-  thumbnail: string;
+// Define explicit types for all state
+interface OutfitType {
+  isOutfit: boolean;
+  type: 'clothes' | 'hats' | 'shoes' | null;
 }
 
 interface ConversionStatus {
@@ -37,25 +36,242 @@ interface ConversionStatus {
   message: string;
 }
 
-// Add new interface for outfit types
-interface OutfitType {
-  isOutfit: boolean;
-  type: 'clothes' | 'hats' | 'shoes' | null;
+interface ImageValidation {
+  isValid: boolean;
+  message: string | null;
 }
 
-export default function ImageUploader() {
+interface ModelUrls {
+  glb: string;
+  fbx: string;
+  usdz: string;
+  thumbnail: string;
+  [key: string]: string;
+}
+
+// Break down into smaller components
+const DownloadReminderDialog = ({ 
+  open, 
+  onClose, 
+  onContinue 
+}: { 
+  open: boolean; 
+  onClose: () => void; 
+  onContinue: () => void; 
+}) => (
+  <Dialog open={open} onClose={onClose}>
+    <DialogTitle>Download Your Files</DialogTitle>
+    <DialogContent>
+      <DialogContentText>
+        Please make sure to download all your converted files before starting a new conversion.
+        The current files will be removed when you start a new conversion.
+      </DialogContentText>
+    </DialogContent>
+    <DialogActions>
+      <Button onClick={onClose} color="primary">Go Back</Button>
+      <Button onClick={onContinue} color="primary" variant="contained">
+        Continue Anyway
+      </Button>
+    </DialogActions>
+  </Dialog>
+);
+
+// Smaller components
+const FileInput: React.FC<{
+  loading: boolean;
+  onFileSelect: (event: ChangeEvent<HTMLInputElement>) => void;
+}> = ({ loading, onFileSelect }) => {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  
+  const handleButtonClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+  
+  return (
+    <div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        style={{ display: 'none' }}
+        accept="image/*"
+        onChange={onFileSelect}
+        disabled={loading}
+      />
+      <Button
+        variant="contained"
+        fullWidth
+        disabled={loading}
+        onClick={handleButtonClick}
+      >
+        Select Image
+      </Button>
+    </div>
+  );
+};
+
+const FileInfo: React.FC<{
+  fileName: string;
+  isValidating: boolean;
+  validation: ImageValidation;
+}> = ({ fileName, isValidating, validation }) => (
+  <div style={{ marginTop: '8px', marginBottom: '24px' }}>
+    <Typography variant="body2">
+      Selected: {fileName}
+    </Typography>
+    {isValidating ? (
+      <Typography variant="body2" color="primary">
+        Validating image...
+      </Typography>
+    ) : validation.message && (
+      <Typography 
+        variant="body2"
+        color={validation.isValid ? "success.main" : "error"}
+      >
+        {validation.message}
+      </Typography>
+    )}
+  </div>
+);
+
+// Break down OutfitTypeSelector into smaller components
+const OutfitButton: React.FC<{
+  selected: boolean;
+  onClick: () => void;
+  disabled: boolean;
+  label: string;
+  sx?: Record<string, unknown>;
+}> = ({ selected, onClick, disabled, label, sx }) => (
+  <Button
+    variant={selected ? "contained" : "outlined"}
+    onClick={onClick}
+    disabled={disabled}
+    sx={sx}
+  >
+    {label}
+  </Button>
+);
+
+const OutfitTypeButton: React.FC<{
+  type: string;
+  selected: boolean;
+  onClick: () => void;
+  disabled: boolean;
+}> = ({ type, selected, onClick, disabled }) => (
+  <Grid item xs={4}>
+    <Button
+      fullWidth
+      variant={selected ? "contained" : "outlined"}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {type.charAt(0).toUpperCase() + type.slice(1)}
+    </Button>
+  </Grid>
+);
+
+const OutfitTypeSelector: React.FC<{
+  outfitType: OutfitType;
+  loading: boolean;
+  onChange: (newType: OutfitType) => void;
+}> = ({ outfitType, loading, onChange }) => (
+  <div style={{ marginBottom: '24px' }}>
+    <Typography variant="subtitle1" gutterBottom>
+      Image Type
+    </Typography>
+    <div style={{ marginBottom: '16px' }}>
+      <OutfitButton
+        selected={outfitType.isOutfit}
+        onClick={() => onChange({ isOutfit: true, type: null })}
+        disabled={loading}
+        label="Outfit"
+        sx={{ mr: 1 }}
+      />
+      <OutfitButton
+        selected={!outfitType.isOutfit}
+        onClick={() => onChange({ isOutfit: false, type: null })}
+        disabled={loading}
+        label="Other"
+      />
+    </div>
+    {outfitType.isOutfit && (
+      <div style={{ marginBottom: '16px' }}>
+        <Typography variant="subtitle2" gutterBottom>
+          Outfit Type
+        </Typography>
+        <Grid container spacing={1}>
+          {(['clothes', 'hats', 'shoes'] as const).map((type) => (
+            <OutfitTypeButton
+              key={type}
+              type={type}
+              selected={outfitType.type === type}
+              onClick={() => onChange({
+                ...outfitType,
+                type
+              })}
+              disabled={loading}
+            />
+          ))}
+        </Grid>
+      </div>
+    )}
+  </div>
+);
+
+const DownloadButton: React.FC<{
+  format: string;
+  url: string;
+}> = ({ format, url }) => (
+  <Grid item xs={6} sm={3}>
+    <a
+      style={{
+        textDecoration: 'none',
+        width: '100%',
+        display: 'block'
+      }}
+      href={url}
+      download
+    >
+      <Button variant="outlined" fullWidth>
+        Download {format.toUpperCase()}
+      </Button>
+    </a>
+  </Grid>
+);
+
+const ConversionProgress: React.FC<{
+  status: ConversionStatus;
+  processingStatus?: string;
+}> = ({ status, processingStatus }) => (
+  <>
+    <LinearProgress
+      variant="determinate"
+      value={status.progress}
+      sx={{ mb: 1, mt: 3 }}
+    />
+    <Typography
+      variant="body2"
+      color={status.stage === 'error' ? 'error' : 'textSecondary'}
+    >
+      {status.message}
+    </Typography>
+    {processingStatus && (
+      <Typography
+        variant="body2"
+        color="primary"
+        sx={{ mt: 1 }}
+      >
+        {processingStatus}
+      </Typography>
+    )}
+  </>
+);
+
+// Main component
+export default function ImageUploader(): JSX.Element {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [fileName, setFileName] = useState('');
-  const [isValidating, setIsValidating] = useState(false);
-  const [imageValidation, setImageValidation] = useState<{
-    isValid: boolean;
-    message: string | null;
-  }>({
-    isValid: false,
-    message: null
-  });
-  const [isLoading, setIsLoading] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [modelUrls, setModelUrls] = useState<ModelUrls | null>(null);
   const [status, setStatus] = useState<ConversionStatus>({
@@ -63,17 +279,19 @@ export default function ImageUploader() {
     progress: 0,
     message: 'Ready to convert'
   });
-  const [isEditing, setIsEditing] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  // Add new state for outfit type
   const [outfitType, setOutfitType] = useState<OutfitType>({
     isOutfit: false,
     type: null
   });
   const [processingStatus, setProcessingStatus] = useState<string>('');
-  // Add new state for dialog
-  const [showDownloadReminder, setShowDownloadReminder] = useState(false);
+  const [isValidating, setIsValidating] = useState<boolean>(false);
+  const [imageValidation, setImageValidation] = useState<ImageValidation>({
+    isValid: false,
+    message: null
+  });
+  const [showDownloadReminder, setShowDownloadReminder] = useState<boolean>(false);
 
+  // Handle file selection
   const handleFileSelect = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -115,21 +333,20 @@ export default function ImageUploader() {
     }
   };
 
-  const handleFileNameChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setFileName(event.target.value);
-    setError(null);
+  // Check if convert button should be enabled
+  const isConvertEnabled = (): boolean => {
+    // Check if a valid file is selected
+    if (!selectedFile || !imageValidation.isValid) return false;
+    
+    // Check if outfit type is selected when in outfit mode
+    if (outfitType.isOutfit && !outfitType.type) return false;
+    
+    return true;
   };
 
-  const isValidModelUrls = (data: any): data is ModelUrls => {
-    return data && 
-      typeof data.glb === 'string' && 
-      typeof data.fbx === 'string' && 
-      typeof data.usdz === 'string' && 
-      typeof data.thumbnail === 'string';
-  };
-
+  // Handle conversion
   const handleConvert = async () => {
-    if (!selectedFile || !fileName) return;
+    if (!isConvertEnabled() || !selectedFile) return;
 
     setLoading(true);
     setError(null);
@@ -143,7 +360,6 @@ export default function ImageUploader() {
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
-      formData.append('fileName', fileName);
       formData.append('isOutfit', outfitType.isOutfit.toString());
       if (outfitType.isOutfit && outfitType.type) {
         formData.append('outfitType', outfitType.type);
@@ -171,15 +387,6 @@ export default function ImageUploader() {
         setProcessingStatus('Adjusting 3D model for Roblox...');
       }
 
-      // Verify files are accessible
-      const fileUrls = data.outputs;
-      for (const url of Object.values(fileUrls)) {
-        const testResponse = await fetch(url as string);
-        if (!testResponse.ok) {
-          throw new Error(`Failed to access file: ${url}`);
-        }
-      }
-
       setStatus({
         stage: 'complete',
         progress: 100,
@@ -200,37 +407,9 @@ export default function ImageUploader() {
     }
   };
 
-  // Add effect to handle preview when modelUrls changes
-  useEffect(() => {
-    if (modelUrls?.glb) {
-      // Verify the GLB file is accessible
-      fetch(modelUrls.glb)
-        .then(response => {
-          if (response.ok) {
-            setPreviewUrl(modelUrls.glb);
-          } else {
-            console.error('Failed to load GLB file');
-            setError('Failed to load 3D preview');
-          }
-        })
-        .catch(err => {
-          console.error('Error loading GLB file:', err);
-          setError('Failed to load 3D preview');
-        });
-    }
-  }, [modelUrls]);
-
-  // Add validation for enabling Convert button
-  const isConvertEnabled = () => {
-    if (!selectedFile || !fileName || !imageValidation.isValid) return false;
-    if (outfitType.isOutfit && !outfitType.type) return false;
-    return true;
-  };
-
-  // Add reset function
+  // Reset converter
   const resetConverter = () => {
     setSelectedFile(null);
-    setFileName('');
     setImageValidation({ isValid: false, message: null });
     setError(null);
     setModelUrls(null);
@@ -243,7 +422,7 @@ export default function ImageUploader() {
     setProcessingStatus('');
   };
 
-  // Add handler for starting new conversion
+  // Handle new conversion
   const handleNewConversion = () => {
     if (modelUrls) {
       setShowDownloadReminder(true);
@@ -252,31 +431,26 @@ export default function ImageUploader() {
     }
   };
 
-  return (
-    <Box sx={{ maxWidth: 1200, mx: 'auto', p: 2 }}>
+  const renderContent = (): JSX.Element => (
+    <Box component="div" sx={{ maxWidth: 1200, mx: 'auto', p: 2 }}>
       <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
         <Typography variant="h4" gutterBottom align="center">
           2D to 3D Converter
         </Typography>
 
-        <Stepper activeStep={
-          status.stage === 'idle' ? 0 :
-          status.stage === 'uploading' ? 1 :
-          status.stage === 'processing' ? 2 :
-          status.stage === 'complete' ? 3 : 0
-        } sx={{ mb: 4 }}>
-          <Step>
-            <StepLabel>Select Image</StepLabel>
-          </Step>
-          <Step>
-            <StepLabel>Upload</StepLabel>
-          </Step>
-          <Step>
-            <StepLabel>Convert</StepLabel>
-          </Step>
-          <Step>
-            <StepLabel>Complete</StepLabel>
-          </Step>
+        <Stepper 
+          activeStep={
+            status.stage === 'idle' ? 0 :
+            status.stage === 'uploading' ? 1 :
+            status.stage === 'processing' ? 2 :
+            status.stage === 'complete' ? 3 : 0
+          } 
+          sx={{ mb: 4 }}
+        >
+          <Step><StepLabel>Select Image</StepLabel></Step>
+          <Step><StepLabel>Upload</StepLabel></Step>
+          <Step><StepLabel>Convert</StepLabel></Step>
+          <Step><StepLabel>Complete</StepLabel></Step>
         </Stepper>
 
         <Grid container spacing={3}>
@@ -286,103 +460,25 @@ export default function ImageUploader() {
                 Input
               </Typography>
 
-              {/* File Selection */}
-              <Box sx={{ mb: 3 }}>
-                <Button
-                  variant="contained"
-                  component="label"
-                  fullWidth
-                  disabled={loading}
-                >
-                  Select Image
-                  <input
-                    type="file"
-                    hidden
-                    accept="image/*"
-                    onChange={handleFileSelect}
-                  />
-                </Button>
+              <div style={{ marginBottom: '24px' }}>
+                <FileInput loading={loading} onFileSelect={handleFileSelect} />
                 {selectedFile && (
-                  <Box sx={{ mt: 1 }}>
-                    <Typography variant="body2">
-                      Selected: {selectedFile.name}
-                    </Typography>
-                    {isValidating ? (
-                      <Typography variant="body2" color="primary">
-                        Validating image...
-                      </Typography>
-                    ) : imageValidation.message && (
-                      <Typography 
-                        variant="body2" 
-                        color={imageValidation.isValid ? "success.main" : "error"}
-                      >
-                        {imageValidation.message}
-                      </Typography>
-                    )}
-                  </Box>
+                  <FileInfo 
+                    fileName={selectedFile.name}
+                    isValidating={isValidating}
+                    validation={imageValidation}
+                  />
                 )}
-              </Box>
+              </div>
 
-              {/* Output Filename */}
-              <Box sx={{ mb: 3 }}>
-                <TextField
-                  fullWidth
-                  label="Output Filename"
-                  value={fileName}
-                  onChange={handleFileNameChange}
-                  disabled={loading}
-                  error={!!error}
-                  helperText={error || "Enter name for output files"}
+              <div style={{ marginBottom: '24px' }}>
+                <OutfitTypeSelector
+                  outfitType={outfitType}
+                  loading={loading}
+                  onChange={setOutfitType}
                 />
-              </Box>
+              </div>
 
-              {/* Image Type Selection */}
-              <Box sx={{ mb: 3 }}>
-                <Typography variant="subtitle1" gutterBottom>
-                  Image Type
-                </Typography>
-                <Box sx={{ mb: 2 }}>
-                  <Button
-                    variant={outfitType.isOutfit ? "contained" : "outlined"}
-                    onClick={() => setOutfitType({ isOutfit: true, type: null })}
-                    sx={{ mr: 1 }}
-                    disabled={loading}
-                  >
-                    Outfit
-                  </Button>
-                  <Button
-                    variant={!outfitType.isOutfit ? "contained" : "outlined"}
-                    onClick={() => setOutfitType({ isOutfit: false, type: null })}
-                    disabled={loading}
-                  >
-                    Other
-                  </Button>
-                </Box>
-
-                {outfitType.isOutfit && (
-                  <Box sx={{ mb: 2 }}>
-                    <Typography variant="subtitle2" gutterBottom>
-                      Outfit Type
-                    </Typography>
-                    <Grid container spacing={1}>
-                      {['clothes', 'hats', 'shoes'].map((type) => (
-                        <Grid item xs={4} key={type}>
-                          <Button
-                            fullWidth
-                            variant={outfitType.type === type ? "contained" : "outlined"}
-                            onClick={() => setOutfitType({ ...outfitType, type: type as OutfitType['type'] })}
-                            disabled={loading}
-                          >
-                            {type.charAt(0).toUpperCase() + type.slice(1)}
-                          </Button>
-                        </Grid>
-                      ))}
-                    </Grid>
-                  </Box>
-                )}
-              </Box>
-
-              {/* Convert Button */}
               <Button
                 variant="contained"
                 color="primary"
@@ -393,43 +489,23 @@ export default function ImageUploader() {
                 {loading ? <CircularProgress size={24} /> : 'Convert to 3D'}
               </Button>
 
-              {/* Status and Progress */}
               {status.stage !== 'idle' && (
-                <Box sx={{ mt: 3 }}>
-                  <LinearProgress 
-                    variant="determinate" 
-                    value={status.progress} 
-                    sx={{ mb: 1 }}
-                  />
-                  <Typography 
-                    variant="body2" 
-                    color={status.stage === 'error' ? 'error' : 'textSecondary'}
-                  >
-                    {status.message}
-                  </Typography>
-                  {processingStatus && (
-                    <Typography 
-                      variant="body2" 
-                      color="primary" 
-                      sx={{ mt: 1 }}
-                    >
-                      {processingStatus}
-                    </Typography>
-                  )}
-                </Box>
+                <ConversionProgress
+                  status={status}
+                  processingStatus={processingStatus}
+                />
               )}
             </Paper>
           </Grid>
 
           <Grid item xs={12} md={8}>
             {modelUrls ? (
-              <Paper elevation={2} sx={{ p: 2 }}>
-                <Typography variant="h6" gutterBottom>
+              <Paper component="div" elevation={2} sx={{ p: 2 }}>
+                <Typography component="h2" variant="h6" gutterBottom>
                   Results
                 </Typography>
 
-                {/* Add New Conversion Button at the top */}
-                <Box sx={{ mb: 3 }}>
+                <Box component="div" sx={{ mb: 3 }}>
                   <Button
                     variant="contained"
                     color="primary"
@@ -440,8 +516,8 @@ export default function ImageUploader() {
                   </Button>
                 </Box>
 
-                <Box sx={{ mb: 4 }}>
-                  <Typography variant="subtitle1" gutterBottom>
+                <Box component="div" sx={{ mb: 4 }}>
+                  <Typography component="h3" variant="subtitle1" gutterBottom>
                     3D Preview
                   </Typography>
                   <ModelViewer 
@@ -452,21 +528,26 @@ export default function ImageUploader() {
                   />
                 </Box>
 
-                <Box>
-                  <Typography variant="subtitle1" gutterBottom>
+                <Box component="div">
+                  <Typography component="h3" variant="subtitle1" gutterBottom>
                     Download Files
                   </Typography>
                   <Grid container spacing={2}>
                     {Object.entries(modelUrls).map(([format, url]) => (
                       <Grid item xs={6} sm={3} key={format}>
-                        <Button
-                          variant="outlined"
-                          fullWidth
+                        <a
+                          style={{
+                            textDecoration: 'none',
+                            width: '100%',
+                            display: 'block'
+                          }}
                           href={url}
                           download
                         >
-                          Download {format.toUpperCase()}
-                        </Button>
+                          <Button variant="outlined" fullWidth>
+                            Download {format.toUpperCase()}
+                          </Button>
+                        </a>
                       </Grid>
                     ))}
                   </Grid>
@@ -474,6 +555,7 @@ export default function ImageUploader() {
               </Paper>
             ) : (
               <Paper 
+                component="div"
                 elevation={2} 
                 sx={{ 
                   p: 2, 
@@ -483,7 +565,7 @@ export default function ImageUploader() {
                   justifyContent: 'center' 
                 }}
               >
-                <Typography variant="body1" color="textSecondary">
+                <Typography component="p" variant="body1" color="textSecondary">
                   3D preview will appear here
                 </Typography>
               </Paper>
@@ -492,39 +574,16 @@ export default function ImageUploader() {
         </Grid>
       </Paper>
 
-      {/* Add Download Reminder Dialog */}
-      <Dialog
+      <DownloadReminderDialog
         open={showDownloadReminder}
         onClose={() => setShowDownloadReminder(false)}
-      >
-        <DialogTitle>
-          Download Your Files
-        </DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Please make sure to download all your converted files before starting a new conversion.
-            The current files will be removed when you start a new conversion.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button 
-            onClick={() => setShowDownloadReminder(false)}
-            color="primary"
-          >
-            Go Back
-          </Button>
-          <Button
-            onClick={() => {
-              setShowDownloadReminder(false);
-              resetConverter();
-            }}
-            color="primary"
-            variant="contained"
-          >
-            Continue Anyway
-          </Button>
-        </DialogActions>
-      </Dialog>
+        onContinue={() => {
+          setShowDownloadReminder(false);
+          resetConverter();
+        }}
+      />
     </Box>
   );
+
+  return renderContent();
 } 

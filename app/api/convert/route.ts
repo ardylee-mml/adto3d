@@ -3,38 +3,86 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-export async function POST(req: NextRequest) {
+export async function POST(req: NextRequest): Promise<Response> {
     console.log('Received conversion request');
     try {
         const formData = await req.formData();
-        const file = formData.get('file') as File;
-        const fileName = formData.get('fileName') as string;
+
+        // Get the uploaded file
+        const file = formData.get('file');
         const isOutfit = formData.get('isOutfit') === 'true';
         const outfitType = formData.get('outfitType') as string | null;
 
-        if (!file || !fileName) {
+        if (!file || !(file instanceof Blob)) {
+            console.error('No valid file received');
             return NextResponse.json({
                 success: false,
-                error: 'File and fileName are required'
+                error: 'No valid file uploaded'
             }, { status: 400 });
         }
 
-        // Save uploaded file temporarily
-        const uploadsDir = path.join(process.cwd(), 'temp', 'uploads');
-        fs.mkdirSync(uploadsDir, { recursive: true });
-        const filePath = path.join(uploadsDir, file.name);
+        // Get the original filename
+        const originalFilename = (file as File).name;
+        if (!originalFilename) {
+            console.error('No filename in uploaded file');
+            return NextResponse.json({
+                success: false,
+                error: 'No filename in uploaded file'
+            }, { status: 400 });
+        }
 
-        const bytes = await file.arrayBuffer();
-        fs.writeFileSync(filePath, Buffer.from(bytes));
+        console.log('Processing file:', originalFilename);
 
-        // Run Python script with outfit parameters
-        return new Promise((resolve) => {
+        // Ensure uploads directory exists
+        const uploadsDir = '/home/mml_admin/2dto3d/uploads';
+        try {
+            if (!fs.existsSync(uploadsDir)) {
+                console.log('Creating uploads directory');
+                await fs.promises.mkdir(uploadsDir, { recursive: true });
+            }
+        } catch (error) {
+            console.error('Failed to create uploads directory:', error);
+            return NextResponse.json({
+                success: false,
+                error: 'Server configuration error'
+            }, { status: 500 });
+        }
+
+        // Save the uploaded file
+        const uploadFilePath = path.join(uploadsDir, originalFilename);
+        console.log('Saving file to:', uploadFilePath);
+
+        try {
+            const buffer = Buffer.from(await file.arrayBuffer());
+            await fs.promises.writeFile(uploadFilePath, buffer);
+
+            // Verify file was saved
+            const stats = await fs.promises.stat(uploadFilePath);
+            console.log('File saved:', {
+                path: uploadFilePath,
+                size: stats.size
+            });
+        } catch (error) {
+            console.error('Failed to save file:', error);
+            return NextResponse.json({
+                success: false,
+                error: 'Failed to save uploaded file'
+            }, { status: 500 });
+        }
+
+        // Run Python script using the original filename for both input and output
+        return await new Promise<Response>((resolve) => {
+            const outputBaseName = path.parse(originalFilename).name; // Remove extension
+
+            console.log('Starting conversion:', {
+                input: uploadFilePath,
+                outputBase: outputBaseName
+            });
+
             const pythonProcess = spawn('python3', [
-                path.join(process.cwd(), 'scripts', 'convert_image.py'),
-                filePath,
-                fileName,
-                isOutfit ? 'true' : 'false',
-                outfitType || ''
+                path.join(process.cwd(), 'scripts', 'convert_to_3d.py'),
+                '-i', uploadFilePath,
+                '-o', path.join(process.cwd(), 'temp', 'output', `${outputBaseName}.glb`)
             ]);
 
             let outputData = '';
@@ -51,58 +99,47 @@ export async function POST(req: NextRequest) {
             });
 
             pythonProcess.on('close', (code) => {
-                // Clean up uploaded file
                 try {
-                    fs.unlinkSync(filePath);
-                } catch (e) {
-                    console.error('Error cleaning up file:', e);
-                }
+                    // Process output and check for files
+                    const basePath = path.join(process.cwd(), 'temp', 'output', outputBaseName);
+                    const files = [
+                        `${outputBaseName}.glb`,
+                        isOutfit ? `${outputBaseName}_processed.fbx` : `${outputBaseName}.fbx`,
+                        `${outputBaseName}.usdz`,
+                        `${outputBaseName}_preview.png`
+                    ];
 
-                try {
-                    // Get the last line of output which should be our JSON
-                    const lines = outputData.trim().split('\n');
-                    const lastLine = lines[lines.length - 1];
-                    const result = JSON.parse(lastLine);
+                    // Check if files exist
+                    const missingFiles = files.filter(file =>
+                        !fs.existsSync(path.join(basePath, file))
+                    );
 
-                    console.log('Parsed result:', result);
-
-                    if (result.success) {
-                        const basePath = path.join(process.cwd(), 'temp', 'output', fileName);
-                        const files = [
-                            `${fileName}.glb`,
-                            isOutfit ? `${fileName}_processed.fbx` : `${fileName}.fbx`,
-                            `${fileName}.usdz`,
-                            `${fileName}_preview.png`
-                        ];
-
-                        // Check if files exist
-                        const missingFiles = files.filter(file =>
-                            !fs.existsSync(path.join(basePath, file))
-                        );
-
-                        if (missingFiles.length > 0) {
-                            console.error('Missing files:', missingFiles);
-                            resolve(NextResponse.json({
-                                success: false,
-                                error: 'Processing failed',
-                                details: `Missing files: ${missingFiles.join(', ')}`
-                            }, { status: 500 }));
-                            return;
-                        }
-
-                        // If processing succeeded, return the result
-                        resolve(NextResponse.json(result));
-                    } else {
-                        resolve(NextResponse.json(result, { status: 400 }));
+                    if (missingFiles.length > 0) {
+                        resolve(NextResponse.json({
+                            success: false,
+                            error: 'Processing failed',
+                            details: `Missing files: ${missingFiles.join(', ')}`
+                        }, { status: 500 }));
+                        return;
                     }
-                } catch (e) {
-                    console.error('Error parsing output:', e);
-                    console.error('Raw output:', outputData);
-                    console.error('Error output:', errorData);
+
+                    // Return success response
+                    resolve(NextResponse.json({
+                        success: true,
+                        message: 'Conversion complete',
+                        outputs: {
+                            glb: `/output/${outputBaseName}.glb`,
+                            fbx: `/output/${isOutfit ? outputBaseName + '_processed.fbx' : outputBaseName + '.fbx'}`,
+                            usdz: `/output/${outputBaseName}.usdz`,
+                            preview: `/output/${outputBaseName}_preview.png`
+                        }
+                    }));
+                } catch (error) {
+                    console.error('Error processing conversion:', error);
                     resolve(NextResponse.json({
                         success: false,
-                        error: 'Failed to process output',
-                        details: errorData || outputData
+                        error: 'Conversion processing failed',
+                        details: error.message
                     }, { status: 500 }));
                 }
             });

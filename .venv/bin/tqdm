@@ -1,4 +1,4 @@
-#!/Users/ardylee/Public/2Dto3D/.venv/bin/python
+#!/home/mml_admin/2dto3d/.venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys

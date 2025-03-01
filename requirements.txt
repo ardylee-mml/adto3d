@@ -1,0 +1,23 @@
+# Web server
+flask==2.0.1
+gunicorn==20.1.0
+python-dotenv==0.19.0
+
+# Image processing
+Pillow==9.0.0
+numpy==1.22.0
+
+# 3D processing
+trimesh==3.9.35
+pyrender==0.1.45
+
+# API
+requests==2.27.1
+werkzeug==2.0.2
+
+# Utilities
+tqdm==4.62.3
+pyyaml==6.0
+
+# Masterpiece X SDK
+mpx-genai-sdk 
