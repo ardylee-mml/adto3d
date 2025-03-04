@@ -72,482 +72,246 @@ ROBLOX_CONFIG = {
 }
 
 def process_fbx_for_roblox(fbx_path, outfit_type):
-    """Process FBX file according to Roblox requirements using Blender."""
+    """Process downloaded FBX file according to Roblox requirements using Blender."""
     try:
-        temp_dir = os.path.join(os.path.dirname(fbx_path), 'temp')
-        os.makedirs(temp_dir, exist_ok=True)
+        logger.info(f"Starting Roblox FBX processing for {outfit_type}")
+        logger.info(f"Source FBX: {fbx_path}")
         
-        script_path = os.path.join(temp_dir, 'process.py')
-        with open(script_path, 'w') as f:
-            f.write(f"""
+        # Prepare output path in the same directory
+        output_dir = os.path.dirname(fbx_path)
+        processed_path = os.path.join(output_dir, os.path.basename(fbx_path).replace('.fbx', '_roblox.fbx'))
+        logger.info(f"Target FBX: {processed_path}")
+        
+        # Call Blender in headless mode to process the FBX
+        logger.info("Launching Blender for FBX processing")
+        blender_script = os.path.join(os.path.dirname(__file__), 'process_fbx.py')
+        cmd = [
+            'blender',
+            '--background',  # Run in headless mode
+            '--python', blender_script,
+            '--',  # Arguments after this are passed to the script
+            fbx_path,
+            processed_path,
+            outfit_type
+        ]
+        
+        # Run Blender process
+        logger.info("Executing Blender process")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        # Parse the JSON output from the script
+        try:
+            # Get the last non-empty line containing JSON output
+            output_lines = [line for line in result.stdout.split('\n') if line.strip()]
+            if not output_lines:
+                raise ValueError("No output from Blender process")
+            
+            output = json.loads(output_lines[-1])
+            if not output['success']:
+                raise RuntimeError(output.get('error', 'Unknown error in FBX processing'))
+            
+            # Process and save comprehensive stats
+            if 'stats' in output:
+                stats = output['stats']
+                
+                # Save detailed stats
+                stats_path = processed_path.replace('.fbx', '_stats.json')
+                with open(stats_path, 'w') as f:
+                    json.dump(stats, f, indent=2)
+                logger.info(f"Saved comprehensive validation stats to {stats_path}")
+                
+                # Log important metrics
+                logger.info("=== Processing Summary ===")
+                logger.info(f"Validation Status: {stats['processing_summary']['validation_status']}")
+                logger.info(f"Geometry Changes:")
+                logger.info(f"  - Vertices: {stats['processing_summary']['geometry_change']['vertices_delta']:+d}")
+                logger.info(f"  - Triangles: {stats['processing_summary']['geometry_change']['triangles_delta']:+d}")
+                logger.info(f"Applied Modifications: {', '.join(stats['processing_summary']['modifications_applied'])}")
+                
+                # Log any warnings or errors
+                if stats['roblox_validation']['warnings']:
+                    logger.warning("Validation Warnings:")
+                    for warning in stats['roblox_validation']['warnings']:
+                        logger.warning(f"  - {warning}")
+                
+                if stats['roblox_validation']['errors']:
+                    logger.error("Validation Errors:")
+                    for error in stats['roblox_validation']['errors']:
+                        logger.error(f"  - {error}")
+            
+            logger.info("FBX processing completed successfully")
+            return processed_path
+            
+        except json.JSONDecodeError:
+            logger.error("Failed to parse Blender output")
+            logger.error(f"Raw output: {result.stdout}")
+            return fbx_path
+            
+    except subprocess.CalledProcessError as e:
+        logger.error("Blender process failed")
+        logger.error(f"Exit code: {e.returncode}")
+        logger.error(f"Error output: {e.stderr}")
+        return fbx_path
+    except Exception as e:
+        logger.error(f"Unexpected error in FBX processing: {str(e)}")
+        return fbx_path
+
+def verify_model_for_roblox(mesh_path, outfit_type):
+    """Verify and log model statistics for Roblox requirements using Blender."""
+    try:
+        logger.info("Analyzing FBX file using Blender...")
+        
+        # Construct command to run Blender in headless mode
+        cmd = [
+            'blender',
+            '--background',
+            '--python-expr',
+            '''
 import bpy
-import os
-import bmesh
-import math
-from mathutils import Vector, Matrix
+import json
 
-def optimize_mesh(obj, max_triangles, target_quality='high'):
-    # Triangulate with specific settings
-    bpy.context.view_layer.objects.active = obj
-    mod = obj.modifiers.new(type='TRIANGULATE', name='Triangulate')
-    mod.quad_method = 'BEAUTY'
-    mod.keep_custom_normals = True
-    bpy.ops.object.modifier_apply(modifier='Triangulate')
+def get_mesh_stats():
+    stats = {
+        'vertices': 0,
+        'faces': 0,
+        'edges': 0,
+        'materials': 0,
+        'uvs': 0,
+        'vertex_groups': 0,
+        'armature': None
+    }
     
-    # Check triangle count and optimize if needed
-    if len(obj.data.polygons) > max_triangles:
-        # First try beauty method
-        mod = obj.modifiers.new(name='Decimate', type='DECIMATE')
-        mod.ratio = max_triangles / len(obj.data.polygons)
-        mod.use_collapse_triangulate = True
-        bpy.ops.object.modifier_apply(modifier='Decimate')
-        
-        # If still too high, use more aggressive decimation
-        if len(obj.data.polygons) > max_triangles:
-            mod = obj.modifiers.new(name='Decimate', type='DECIMATE')
-            mod.ratio = (max_triangles * 0.9) / len(obj.data.polygons)
-            bpy.ops.object.modifier_apply(modifier='Decimate')
-
-def setup_r15_armature():
-    bpy.ops.object.armature_add()
-    armature = bpy.context.active_object
-    armature.name = 'R15_Armature'
-    
-    # Enhanced R15 bone structure with proper connections
-    bones = {{
-        'HumanoidRootNode': {{'pos': Vector((0, 0, 0)), 'parent': None}},
-        'LowerTorso': {{'pos': Vector((0, 0, 1)), 'parent': 'HumanoidRootNode'}},
-        'UpperTorso': {{'pos': Vector((0, 0, 2)), 'parent': 'LowerTorso'}},
-        'Head': {{'pos': Vector((0, 0, 3)), 'parent': 'UpperTorso'}},
-        'LeftUpperArm': {{'pos': Vector((-0.5, 0, 2.5)), 'parent': 'UpperTorso'}},
-        'LeftLowerArm': {{'pos': Vector((-1, 0, 2.3)), 'parent': 'LeftUpperArm'}},
-        'LeftHand': {{'pos': Vector((-1.5, 0, 2.1)), 'parent': 'LeftLowerArm'}},
-        'RightUpperArm': {{'pos': Vector((0.5, 0, 2.5)), 'parent': 'UpperTorso'}},
-        'RightLowerArm': {{'pos': Vector((1, 0, 2.3)), 'parent': 'RightUpperArm'}},
-        'RightHand': {{'pos': Vector((1.5, 0, 2.1)), 'parent': 'RightLowerArm'}},
-        'LeftUpperLeg': {{'pos': Vector((-0.2, 0, 0.8)), 'parent': 'LowerTorso'}},
-        'LeftLowerLeg': {{'pos': Vector((-0.2, 0, 0.4)), 'parent': 'LeftUpperLeg'}},
-        'LeftFoot': {{'pos': Vector((-0.2, 0, 0)), 'parent': 'LeftLowerLeg'}},
-        'RightUpperLeg': {{'pos': Vector((0.2, 0, 0.8)), 'parent': 'LowerTorso'}},
-        'RightLowerLeg': {{'pos': Vector((0.2, 0, 0.4)), 'parent': 'RightUpperLeg'}},
-        'RightFoot': {{'pos': Vector((0.2, 0, 0)), 'parent': 'RightLowerLeg'}}
-    }}
-    
-    # Create and connect bones
-    bpy.ops.object.mode_set(mode='EDIT')
-    created_bones = {{}}
-    
-    for name, data in bones.items():
-        bone = armature.data.edit_bones.new(name)
-        bone.head = data['pos']
-        bone.tail = data['pos'] + Vector((0, 0, 0.2))
-        created_bones[name] = bone
-        
-        if data['parent'] and data['parent'] in created_bones:
-            bone.parent = created_bones[data['parent']]
-            bone.use_connect = True
-    
-    bpy.ops.object.mode_set(mode='OBJECT')
-    return armature
-
-def verify_uv_mapping(obj, outfit_type):
-    if not obj.data.uv_layers:
-        obj.data.uv_layers.new(name='UVMap')
-    
-    # Get the active UV layer
-    uv_layer = obj.data.uv_layers.active
-    
-    # UV validation stats
-    stats = {{
-        'overlapping': 0,
-        'outside_bounds': 0,
-        'total_uvs': len(uv_layer.data)
-    }}
-    
-    # Check and fix UV coordinates
-    for poly in obj.data.polygons:
-        for loop_idx in poly.loop_indices:
-            uv = uv_layer.data[loop_idx].uv
-            
-            # Check for overlapping UVs
-            for other_poly in obj.data.polygons:
-                if poly.index != other_poly.index:
-                    for other_idx in other_poly.loop_indices:
-                        other_uv = uv_layer.data[other_idx].uv
-                        if (uv - other_uv).length < 0.001:
-                            stats['overlapping'] += 1
-            
-            # Fix out-of-bounds UVs
-            if uv.x < 0 or uv.x > 1 or uv.y < 0 or uv.y > 1:
-                stats['outside_bounds'] += 1
-                uv_layer.data[loop_idx].uv = Vector((
-                    max(0, min(1, uv.x)),
-                    max(0, min(1, uv.y))
-                ))
+    for obj in bpy.data.objects:
+        if obj.type == 'MESH':
+            mesh = obj.data
+            stats['vertices'] += len(mesh.vertices)
+            stats['faces'] += len(mesh.polygons)
+            stats['edges'] += len(mesh.edges)
+            stats['materials'] += len(obj.material_slots)
+            stats['uvs'] += len(mesh.uv_layers)
+            stats['vertex_groups'] += len(obj.vertex_groups)
+        elif obj.type == 'ARMATURE':
+            stats['armature'] = {
+                'bones': len(obj.data.bones),
+                'bone_names': [bone.name for bone in obj.data.bones]
+            }
     
     return stats
 
-def add_collision(obj, collision_type='convex'):
-    bpy.ops.object.duplicate()
-    collision = bpy.context.active_object
-    collision.name = f"{obj.name}_collision"
-    
-    if collision_type == 'convex':
-        # Create convex hull for better performance
-        mod = collision.modifiers.new(name='Convex Hull', type='REMESH')
-        mod.mode = 'VOXEL'
-        mod.octree_depth = 4
-        bpy.ops.object.modifier_apply(modifier='Convex Hull')
-    else:
-        # Simplified mesh collision
-        mod = collision.modifiers.new(name='Decimate', type='DECIMATE')
-        mod.ratio = 0.3
-        bpy.ops.object.modifier_apply(modifier='Decimate')
-    
-    # Add collision property
-    collision.game.physics_type = 'STATIC'
-    collision.game.use_collision_bounds = True
-    collision.game.collision_bounds_type = 'CONVEX_HULL' if collision_type == 'convex' else 'TRIANGLE_MESH'
-    
-    collision.parent = obj
-    collision.hide_viewport = True
-    return collision
+def get_dimensions():
+    dims = {'x': 0, 'y': 0, 'z': 0}
+    for obj in bpy.data.objects:
+        if obj.type == 'MESH':
+            dims['x'] = max(dims['x'], abs(obj.dimensions.x))
+            dims['y'] = max(dims['y'], abs(obj.dimensions.y))
+            dims['z'] = max(dims['z'], abs(obj.dimensions.z))
+    return dims
 
-def verify_materials(obj):
-    # Ensure PBR materials
-    for mat_slot in obj.material_slots:
-        if mat_slot.material:
-            mat = mat_slot.material
-            if not mat.use_nodes:
-                mat.use_nodes = True
-            
-            # Set up basic PBR material
-            nodes = mat.node_tree.nodes
-            links = mat.node_tree.links
-            
-            # Clear existing nodes
-            nodes.clear()
-            
-            # Add basic PBR setup
-            output = nodes.new('ShaderNodeOutputMaterial')
-            principled = nodes.new('ShaderNodeBsdfPrincipled')
-            links.new(principled.outputs[0], output.inputs[0])
-            
-            # Set default PBR values
-            principled.inputs['Metallic'].default_value = 0.0
-            principled.inputs['Roughness'].default_value = 0.7
-            principled.inputs['Specular'].default_value = 0.5
-
-def setup_animations(armature, outfit_type):
-    if outfit_type == 'clothes':
-        # Add basic pose library
-        if not armature.pose_library:
-            bpy.ops.pose.new_poselib()
-        
-        # Add default poses
-        poses = {{
-            'T_Pose': {{
-                'LeftUpperArm': (0, 0, 90),
-                'RightUpperArm': (0, 0, -90)
-            }},
-            'A_Pose': {{
-                'LeftUpperArm': (0, 0, 45),
-                'RightUpperArm': (0, 0, -45)
-            }}
-        }}
-        
-        for pose_name, bone_rotations in poses.items():
-            bpy.ops.object.mode_set(mode='POSE')
-            for bone_name, rotation in bone_rotations.items():
-                if bone_name in armature.pose.bones:
-                    bone = armature.pose.bones[bone_name]
-                    bone.rotation_euler = [math.radians(r) for r in rotation]
-            bpy.ops.poselib.pose_add(name=pose_name)
-
-# Clear existing objects
-bpy.ops.object.select_all(action='SELECT')
-bpy.ops.object.delete()
+# Clear existing scene
+bpy.ops.wm.read_factory_settings(use_empty=True)
 
 # Import FBX
-bpy.ops.import_scene.fbx(filepath='{fbx_path}')
+bpy.ops.import_scene.fbx(filepath="%s")
 
-# Get the imported objects
-mesh_obj = None
-armature_obj = None
+# Get statistics
+stats = get_mesh_stats()
+dims = get_dimensions()
 
-# First clear any existing selection
-bpy.ops.object.select_all(action='DESELECT')
+# Calculate additional metrics
+total_area = sum(p.area for obj in bpy.data.objects 
+                if obj.type == 'MESH' 
+                for p in obj.data.polygons)
 
-# Find the mesh and armature objects
-for obj in bpy.context.scene.objects:
-    if obj.type == 'MESH':
-        mesh_obj = obj
-        mesh_obj.select_set(True)
-        bpy.context.view_layer.objects.active = mesh_obj
-    elif obj.type == 'ARMATURE':
-        armature_obj = obj
+result = {
+    'geometry': {
+        'vertices': stats['vertices'],
+        'triangles': stats['faces'],
+        'edges': stats['edges']
+    },
+    'materials': {
+        'count': stats['materials'],
+        'uv_layers': stats['uvs']
+    },
+    'rigging': {
+        'vertex_groups': stats['vertex_groups'],
+        'armature': stats['armature']
+    },
+    'dimensions': dims,
+    'metrics': {
+        'vertex_density': stats['vertices'] / total_area if total_area > 0 else 0,
+        'triangle_density': stats['faces'] / total_area if total_area > 0 else 0,
+        'edge_vertex_ratio': stats['edges'] / stats['vertices'] if stats['vertices'] > 0 else 0
+    }
+}
 
-if mesh_obj:
-    # Process based on outfit type
-    if '{outfit_type}' == 'clothes':
-        if not armature_obj:
-            armature_obj = setup_r15_armature()
-        
-        mesh_obj.scale = (1.0, 1.0, 1.0)
-        optimize_mesh(mesh_obj, 8000, 'high')
-        uv_stats = verify_uv_mapping(mesh_obj, '{outfit_type}')
-        verify_materials(mesh_obj)
-        
-        if armature_obj:
-            mod = mesh_obj.modifiers.new(type='ARMATURE', name="Armature")
-            mod.object = armature_obj
-            mesh_obj.parent = armature_obj
-            setup_animations(armature_obj, '{outfit_type}')
-            
-            # Weight paint setup
-            bpy.ops.paint.weight_paint_mode_toggle()
-            bpy.ops.object.vertex_group_normalize_all()
-
-    elif '{outfit_type}' == 'hats':
-        max_dim = max(mesh_obj.dimensions)
-        if max_dim > 5:
-            scale_factor = 5 / max_dim
-            mesh_obj.scale = (scale_factor, scale_factor, scale_factor)
-        
-        optimize_mesh(mesh_obj, 2000, 'medium')
-        uv_stats = verify_uv_mapping(mesh_obj, '{outfit_type}')
-        verify_materials(mesh_obj)
-        
-        # Add head attachment point
-        bpy.ops.object.empty_add(type='PLAIN_AXES', location=(0, 0, 0))
-        attachment = bpy.context.active_object
-        attachment.name = 'HeadAttachment'
-        attachment.parent = mesh_obj
-        
-        # Add optimized collision
-        collision = add_collision(mesh_obj, 'convex')
-
-    elif '{outfit_type}' == 'shoes':
-        max_dim = max(mesh_obj.dimensions)
-        if max_dim > 2:
-            scale_factor = 2 / max_dim
-            mesh_obj.scale = (scale_factor, scale_factor, scale_factor)
-        
-        optimize_mesh(mesh_obj, 1500, 'high')
-        uv_stats = verify_uv_mapping(mesh_obj, '{outfit_type}')
-        verify_materials(mesh_obj)
-        
-        for side in ['Left', 'Right']:
-            bpy.ops.object.empty_add(type='PLAIN_AXES')
-            attachment = bpy.context.active_object
-            attachment.name = f'{side}FootAttachment'
-            attachment.parent = mesh_obj
-        
-        # Add detailed collision
-        collision = add_collision(mesh_obj, 'mesh')
-
-    # Common processing for all types
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.remove_doubles(threshold=0.001)
-    bpy.ops.mesh.delete_loose()
-    bpy.ops.mesh.dissolve_degenerate()
-    bpy.ops.mesh.normals_make_consistent(inside=False)
-    bpy.ops.object.mode_set(mode='OBJECT')
-
-    # Make sure the mesh object is selected for export
-    bpy.ops.object.select_all(action='DESELECT')
-    mesh_obj.select_set(True)
-    if armature_obj:
-        armature_obj.select_set(True)
-    bpy.context.view_layer.objects.active = mesh_obj
-
-    # Export processed FBX
-    output_path = '{fbx_path}'.replace('.fbx', '_roblox.fbx')
-    bpy.ops.export_scene.fbx(
-        filepath=output_path,
-        use_selection=True,
-        global_scale=1.0,
-        apply_unit_scale=True,
-        bake_space_transform=True,
-        use_mesh_modifiers=True,
-        mesh_smooth_type='OFF',
-        add_leaf_bones=False,
-        primary_bone_axis='Y',
-        secondary_bone_axis='X',
-        use_armature_deform_only=True,
-        bake_anim=False
-    )
-
-    # Enhanced export statistics
-    stats = {{
-        'mesh': {{
-            'triangles': len(mesh_obj.data.polygons),
-            'vertices': len(mesh_obj.data.vertices),
-            'edges': len(mesh_obj.data.edges),
-            'uv_layers': len(mesh_obj.data.uv_layers),
-            'vertex_groups': len(mesh_obj.vertex_groups),
-            'materials': len(mesh_obj.material_slots),
-            'dimensions': [mesh_obj.dimensions.x, mesh_obj.dimensions.y, mesh_obj.dimensions.z],
-            'volume': mesh_obj.dimensions.x * mesh_obj.dimensions.y * mesh_obj.dimensions.z,
-            'bounds_center': [mesh_obj.location.x, mesh_obj.location.y, mesh_obj.location.z]
-        }},
-        'uv_mapping': uv_stats,
-        'armature': {{
-            'exists': armature_obj is not None,
-            'bones': len(armature_obj.data.bones) if armature_obj else 0,
-            'has_animations': bool(armature_obj.animation_data) if armature_obj else False,
-            'animation_details': {{
-                'action_count': len(armature_obj.animation_data.actions) if armature_obj and armature_obj.animation_data else 0,
-                'total_frames': sum(action.frame_range[1] - action.frame_range[0] for action in armature_obj.animation_data.actions) if armature_obj and armature_obj.animation_data else 0,
-                'animation_types': [action.name for action in armature_obj.animation_data.actions] if armature_obj and armature_obj.animation_data else []
-            }} if armature_obj and armature_obj.animation_data else None
-        }} if armature_obj else None,
-        'materials': [{{
-            'name': mat.material.name if mat.material else 'None',
-            'has_texture': bool(mat.material.use_nodes) if mat.material else False,
-            'surface_properties': {{
-                'type': mat.material.get('surface_type', 'Unknown') if mat.material else 'None',
-                'transparency': mat.material.alpha if mat.material else 1.0,
-                'reflectance': mat.material.metallic if mat.material else 0.0,
-                'roughness': mat.material.roughness if mat.material else 0.5
-            }} if mat.material else None
-        }} for mat in mesh_obj.material_slots],
-        'attachments': [child.name for child in mesh_obj.children if child.type == 'EMPTY'],
-        'has_collision': any(child.name.endswith('_collision') for child in mesh_obj.children),
-        'physics': {{
-            'enabled': bool(mesh_obj.rigid_body or mesh_obj.soft_body),
-            'type': 'rigid' if mesh_obj.rigid_body else 'soft' if mesh_obj.soft_body else 'none',
-            'properties': {{
-                'mass': mesh_obj.rigid_body.mass if mesh_obj.rigid_body else None,
-                'friction': mesh_obj.rigid_body.friction if mesh_obj.rigid_body else None,
-                'use_margin': mesh_obj.rigid_body.use_margin if mesh_obj.rigid_body else None,
-                'collision_shape': mesh_obj.rigid_body.collision_shape if mesh_obj.rigid_body else None
-            }} if mesh_obj.rigid_body or mesh_obj.soft_body else None
-        }},
-        'lod': {{
-            'enabled': bool(mesh_obj.modifiers.get('LOD')),
-            'levels': [{{
-                'distance': mod.distance,
-                'ratio': mod.ratio
-            }} for mod in mesh_obj.modifiers if mod.type == 'DECIMATE' and 'LOD' in mod.name] if mesh_obj.modifiers.get('LOD') else []
-        }},
-        'constraints': [{{
-            'type': const.type,
-            'name': const.name,
-            'target': const.target.name if const.target else None,
-            'influence': const.influence
-        }} for const in mesh_obj.constraints]
-    }}
-    
-    with open(output_path + '_stats.json', 'w') as f:
-        import json
-        json.dump(stats, f, indent=2)
-""")
-
-        # Run Blender in background mode
-        blender_cmd = [
-            'blender',
-            '--background',
-            '--python', script_path
+print("STATS_START")
+print(json.dumps(result))
+print("STATS_END")
+''' % mesh_path
         ]
         
-        result = subprocess.run(blender_cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error(f"Blender processing failed: {result.stderr}")
-            return None
-            
-        processed_path = fbx_path.replace('.fbx', '_roblox.fbx')
-        stats_path = processed_path + '_stats.json'
+        # Run Blender process
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         
-        if os.path.exists(processed_path):
-            # Enhanced validation
-            if os.path.exists(stats_path):
-                with open(stats_path, 'r') as f:
-                    stats = json.load(f)
+        # Parse the output to get the statistics
+        output = result.stdout
+        start_idx = output.find("STATS_START") + len("STATS_START")
+        end_idx = output.find("STATS_END")
+        
+        if start_idx == -1 or end_idx == -1:
+            raise ValueError("Could not find statistics in Blender output")
+            
+        stats_json = output[start_idx:end_idx].strip()
+        stats = json.loads(stats_json)
+        
+        # Add validation results
+        config = ROBLOX_CONFIG.get(outfit_type, {})
+        validation = {
+            'warnings': [],
+            'errors': []
+        }
+        
+        # Check triangle count
+        max_triangles = config.get('max_triangles', 8000)
+        if stats['geometry']['triangles'] > max_triangles:
+            validation['errors'].append(
+                f"Triangle count ({stats['geometry']['triangles']}) exceeds limit ({max_triangles})"
+            )
+            
+        # Check dimensions
+        if 'size_limits' in config:
+            for axis, limit in config['size_limits'].items():
+                if stats['dimensions'][axis] > limit:
+                    validation['warnings'].append(
+                        f"{axis.upper()} dimension ({stats['dimensions'][axis]:.2f}) exceeds recommended limit ({limit})"
+                    )
                     
-                config = ROBLOX_CONFIG[outfit_type]
-                validation_errors = []
-                validation_warnings = []
-                
-                # Mesh validation
-                if stats['mesh']['triangles'] > config['max_triangles']:
-                    validation_errors.append(
-                        f"Triangle count ({stats['mesh']['triangles']}) exceeds limit ({config['max_triangles']})"
-                    )
-                
-                # Size validation
-                if outfit_type in ['hats', 'shoes']:
-                    size_limits = config['size_limits']
-                    for i, dim in enumerate(['x', 'y', 'z']):
-                        if stats['mesh']['dimensions'][i] > size_limits[dim]:
-                            validation_errors.append(
-                                f"{dim.upper()} dimension ({stats['mesh']['dimensions'][i]}) exceeds limit ({size_limits[dim]})"
-                            )
-                
-                # UV mapping validation
-                if stats['uv_mapping']['overlapping'] > 0:
-                    validation_warnings.append(
-                        f"Found {stats['uv_mapping']['overlapping']} overlapping UVs"
-                    )
-                if stats['uv_mapping']['outside_bounds'] > 0:
-                    validation_warnings.append(
-                        f"Found {stats['uv_mapping']['outside_bounds']} UVs outside 0-1 range (fixed)"
-                    )
-                
-                # Armature validation for clothes
-                if outfit_type == 'clothes':
-                    if not stats['armature']:
-                        validation_errors.append("Missing required armature for clothes")
-                    elif stats['armature']['bones'] < len(config['bones']):
-                        validation_errors.append(
-                            f"Insufficient bones ({stats['armature']['bones']}) for R15 skeleton"
-                        )
-                
-                # Attachment validation
-                required_attachments = config.get('attachments', [])
-                existing_attachments = stats['attachments']
-                missing_attachments = [att for att in required_attachments if att not in existing_attachments]
-                if missing_attachments:
-                    validation_errors.append(f"Missing required attachments: {', '.join(missing_attachments)}")
-                
-                # Material validation
-                if not stats['materials']:
-                    validation_warnings.append("No materials found")
-                else:
-                    untextured_materials = [mat['name'] for mat in stats['materials'] if not mat['has_texture']]
-                    if untextured_materials:
-                        validation_warnings.append(f"Untextured materials found: {', '.join(untextured_materials)}")
-                
-                # Collision validation
-                if outfit_type in ['hats', 'shoes'] and not stats['has_collision']:
-                    validation_errors.append("Missing collision geometry")
-                
-                if validation_errors:
-                    logger.error("Validation errors:")
-                    for error in validation_errors:
-                        logger.error(f"- {error}")
-                
-                if validation_warnings:
-                    logger.warning("Validation warnings:")
-                    for warning in validation_warnings:
-                        logger.warning(f"- {warning}")
-                
-                logger.info("Model statistics:")
-                logger.info(json.dumps(stats, indent=2))
+        # Check rigging requirements
+        if config.get('needs_rigging', False):
+            if not stats['rigging']['armature']:
+                validation['errors'].append("Missing required armature")
+            else:
+                required_bones = config.get('bones', [])
+                missing_bones = [bone for bone in required_bones 
+                               if bone not in stats['rigging']['armature']['bone_names']]
+                if missing_bones:
+                    validation['errors'].append(f"Missing required bones: {', '.join(missing_bones)}")
+                    
+        # Check UV maps
+        if stats['materials']['uv_layers'] == 0:
+            validation['errors'].append("No UV maps found")
             
-            logger.info(f"FBX processing completed: {processed_path}")
-            return processed_path
-        else:
-            logger.error("Processed FBX file not found")
-            return None
-        
+        stats['validation'] = validation
+        return stats
+                
     except Exception as e:
-        logger.error(f"Error processing FBX: {str(e)}")
+        logger.error(f"Error analyzing model: {str(e)}")
         return None
-    finally:
-        # Cleanup
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
 
 def download_file(url, output_path):
     """Download a file from URL and save it to the specified path."""
@@ -565,361 +329,20 @@ def download_file(url, output_path):
         logger.error(f"Error downloading file: {str(e)}")
         return False
 
-def verify_model_for_roblox(mesh_path, outfit_type):
-    """Verify and log model statistics for Roblox requirements."""
-    try:
-        # Load the mesh
-        mesh = trimesh.load(mesh_path)
-        
-        # Get basic statistics
-        stats = {
-            'vertices': len(mesh.vertices),
-            'faces': len(mesh.faces),
-            'bounds': mesh.bounds.tolist(),
-            'volume': float(mesh.volume),
-            'area': float(mesh.area),
-            'performance_metrics': {
-                'geometry': {
-                    'vertex_density': len(mesh.vertices) / float(mesh.area) if mesh.area > 0 else 0,
-                    'triangle_density': len(mesh.faces) / float(mesh.area) if mesh.area > 0 else 0,
-                    'mesh_complexity': len(mesh.edges) / len(mesh.vertices),
-                    'vertex_cache_ratio': len(mesh.vertices) / (len(mesh.faces) * 3),
-                    'validation': []
-                },
-                'textures': {
-                    'total_size': 0,
-                    'texture_count': 0,
-                    'memory_usage': 0,
-                    'validation': []
-                },
-                'materials': {
-                    'unique_materials': 0,
-                    'transparent_count': 0,
-                    'pbr_count': 0,
-                    'validation': []
-                },
-                'animation': {
-                    'keyframe_density': 0,
-                    'bone_count': 0,
-                    'animation_length': 0,
-                    'validation': []
-                },
-                'physics': {
-                    'collision_complexity': 0,
-                    'joint_count': 0,
-                    'constraint_count': 0,
-                    'validation': []
-                },
-                'optimization': {
-                    'uv_efficiency': 0,
-                    'bone_weights_per_vertex': 0,
-                    'draw_call_estimate': 0,
-                    'validation': []
-                }
-            },
-            'roblox_features': {
-                'animations': {
-                    'present': False,
-                    'count': 0,
-                    'types': [],
-                    'total_frames': 0,
-                    'validation': []
-                },
-                'physics': {
-                    'present': False,
-                    'properties': {},
-                    'validation': []
-                },
-                'lod': {
-                    'present': False,
-                    'levels': [],
-                    'validation': []
-                },
-                'surfaces': {
-                    'present': False,
-                    'properties': {},
-                    'validation': []
-                },
-                'constraints': {
-                    'present': False,
-                    'types': [],
-                    'validation': []
-                }
-            }
-        }
-
-        # Performance validation thresholds
-        perf_thresholds = {
-            'vertex_density': {'warning': 0.1, 'error': 0.2},
-            'triangle_density': {'warning': 0.05, 'error': 0.1},
-            'mesh_complexity': {'warning': 2.5, 'error': 3.0},
-            'vertex_cache_ratio': {'warning': 0.8, 'error': 0.9},
-            'texture_memory': {'warning': 1024 * 1024 * 10, 'error': 1024 * 1024 * 20},  # 10MB, 20MB
-            'material_count': {'warning': 3, 'error': 5},
-            'keyframe_density': {'warning': 2, 'error': 4},
-            'bone_weights': {'warning': 4, 'error': 6}
-        }
-
-        # Geometry performance checks
-        geom_metrics = stats['performance_metrics']['geometry']
-        if geom_metrics['vertex_density'] > perf_thresholds['vertex_density']['error']:
-            geom_metrics['validation'].append(
-                f"Error: Very high vertex density ({geom_metrics['vertex_density']:.2f}). Consider reducing vertex count."
-            )
-        elif geom_metrics['vertex_density'] > perf_thresholds['vertex_density']['warning']:
-            geom_metrics['validation'].append(
-                f"Warning: High vertex density ({geom_metrics['vertex_density']:.2f}). May impact performance."
-            )
-
-        if geom_metrics['triangle_density'] > perf_thresholds['triangle_density']['error']:
-            geom_metrics['validation'].append(
-                f"Error: Very high triangle density ({geom_metrics['triangle_density']:.2f}). Consider mesh decimation."
-            )
-        elif geom_metrics['triangle_density'] > perf_thresholds['triangle_density']['warning']:
-            geom_metrics['validation'].append(
-                f"Warning: High triangle density ({geom_metrics['triangle_density']:.2f}). May impact performance."
-            )
-
-        # Check for non-manifold edges and vertices
-        non_manifold_edges = mesh.edges_unique[mesh.edges_unique_inverse.sum(axis=1) > 2]
-        if len(non_manifold_edges) > 0:
-            geom_metrics['validation'].append(
-                f"Error: Found {len(non_manifold_edges)} non-manifold edges. This may cause rendering issues."
-            )
-
-        # Check for degenerate triangles
-        areas = mesh.area_faces
-        degenerate_faces = np.sum(areas < 1e-8)
-        if degenerate_faces > 0:
-            geom_metrics['validation'].append(
-                f"Error: Found {degenerate_faces} degenerate triangles. Clean up mesh geometry."
-            )
-
-        # Material and texture performance checks
-        if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
-            mat_metrics = stats['performance_metrics']['materials']
-            tex_metrics = stats['performance_metrics']['textures']
-            
-            # Calculate texture memory usage
-            if hasattr(mesh.visual.material, 'image'):
-                tex_metrics['texture_count'] += 1
-                tex_size = mesh.visual.material.image.size
-                tex_metrics['total_size'] += tex_size[0] * tex_size[1] * 4  # RGBA
-                tex_metrics['memory_usage'] = tex_metrics['total_size'] / (1024 * 1024)  # Convert to MB
-                
-                if tex_metrics['memory_usage'] > perf_thresholds['texture_memory']['error']:
-                    tex_metrics['validation'].append(
-                        f"Error: Very high texture memory usage ({tex_metrics['memory_usage']:.1f}MB). Reduce texture sizes."
-                    )
-                elif tex_metrics['memory_usage'] > perf_thresholds['texture_memory']['warning']:
-                    tex_metrics['validation'].append(
-                        f"Warning: High texture memory usage ({tex_metrics['memory_usage']:.1f}MB). Consider optimization."
-                    )
-
-        # Animation performance checks
-        if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'animation'):
-            anim_metrics = stats['performance_metrics']['animation']
-            
-            # Calculate keyframe density
-            total_bones = len(getattr(mesh, 'bones', []))
-            total_frames = sum(anim.frame_count for anim in mesh.visual.animation)
-            anim_metrics['bone_count'] = total_bones
-            anim_metrics['animation_length'] = total_frames
-            
-            if total_bones > 0:
-                anim_metrics['keyframe_density'] = total_frames / total_bones
-                
-                if anim_metrics['keyframe_density'] > perf_thresholds['keyframe_density']['error']:
-                    anim_metrics['validation'].append(
-                        f"Error: Very high keyframe density ({anim_metrics['keyframe_density']:.1f}). Reduce animation complexity."
-                    )
-                elif anim_metrics['keyframe_density'] > perf_thresholds['keyframe_density']['warning']:
-                    anim_metrics['validation'].append(
-                        f"Warning: High keyframe density ({anim_metrics['keyframe_density']:.1f}). Consider optimization."
-                    )
-
-        # Physics performance checks
-        phys_metrics = stats['performance_metrics']['physics']
-        if hasattr(mesh, 'physics_properties'):
-            collision_mesh = getattr(mesh, 'collision_mesh', None)
-            if collision_mesh:
-                phys_metrics['collision_complexity'] = len(collision_mesh.faces) / len(mesh.faces)
-                
-                if phys_metrics['collision_complexity'] > 0.5:
-                    phys_metrics['validation'].append(
-                        f"Warning: Complex collision mesh ({phys_metrics['collision_complexity']:.2f} ratio). Consider simplifying."
-                    )
-
-        # Optimization metrics
-        opt_metrics = stats['performance_metrics']['optimization']
-        
-        # UV efficiency check
-        if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'uv'):
-            uv_coords = mesh.visual.uv
-            uv_area = np.sum(np.abs(np.cross(uv_coords[1:] - uv_coords[0], uv_coords[2:] - uv_coords[0]))) / 2
-            opt_metrics['uv_efficiency'] = uv_area / (1.0 if uv_area == 0 else uv_area)
-            
-            if opt_metrics['uv_efficiency'] < 0.5:
-                opt_metrics['validation'].append(
-                    f"Warning: Poor UV space utilization ({opt_metrics['uv_efficiency']:.2f}). Consider repacking UVs."
-                )
-
-        # Draw call estimation
-        unique_materials = len(set(mesh.visual.material.name for face in mesh.faces)) if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material') else 1
-        opt_metrics['draw_call_estimate'] = unique_materials
-        
-        if opt_metrics['draw_call_estimate'] > perf_thresholds['material_count']['error']:
-            opt_metrics['validation'].append(
-                f"Error: High number of draw calls ({opt_metrics['draw_call_estimate']}). Reduce material count."
-            )
-        elif opt_metrics['draw_call_estimate'] > perf_thresholds['material_count']['warning']:
-            opt_metrics['validation'].append(
-                f"Warning: Elevated draw calls ({opt_metrics['draw_call_estimate']}). Consider combining materials."
-            )
-
-        # Log comprehensive performance validation results
-        logger.info("\n=== Performance Validation Results ===")
-        for category, metrics in stats['performance_metrics'].items():
-            logger.info(f"\n{category.upper()} Performance:")
-            for key, value in metrics.items():
-                if key != 'validation':
-                    logger.info(f"- {key}: {value}")
-            if metrics['validation']:
-                for msg in metrics['validation']:
-                    if 'Error' in msg:
-                        logger.error(f"  {msg}")
-                    else:
-                        logger.warning(f"  {msg}")
-
-        return stats
-        
-    except Exception as e:
-        logger.error(f"Error analyzing model: {str(e)}")
-        return None
-
-def add_roblox_animations(armature, outfit_type):
-    """Add Roblox-specific animations."""
-    animations = {
-        'clothes': {
-            'idle': {
-                'frames': 30,
-                'poses': {
-                    'UpperTorso': [(0, 'ROT', (0, 0, 0)), (15, 'ROT', (0, 5, 0)), (30, 'ROT', (0, 0, 0))],
-                    'LowerTorso': [(0, 'ROT', (0, 0, 0)), (15, 'ROT', (0, -2, 0)), (30, 'ROT', (0, 0, 0))]
-                }
-            },
-            'walk': {
-                'frames': 24,
-                'poses': {
-                    'LeftUpperLeg': [(0, 'ROT', (30, 0, 0)), (12, 'ROT', (-30, 0, 0)), (24, 'ROT', (30, 0, 0))],
-                    'RightUpperLeg': [(0, 'ROT', (-30, 0, 0)), (12, 'ROT', (30, 0, 0)), (24, 'ROT', (-30, 0, 0))]
-                }
-            }
-        },
-        'shoes': {
-            'walk': {
-                'frames': 24,
-                'poses': {
-                    'LeftFoot': [(0, 'ROT', (15, 0, 0)), (12, 'ROT', (-15, 0, 0)), (24, 'ROT', (15, 0, 0))],
-                    'RightFoot': [(0, 'ROT', (-15, 0, 0)), (12, 'ROT', (15, 0, 0)), (24, 'ROT', (-15, 0, 0))]
-                }
-            }
-        }
-    }
-
-def add_roblox_physics(obj, outfit_type):
-    """Add Roblox-specific physics properties."""
-    physics_props = {
-        'clothes': {
-            'mass': 1.0,
-            'friction': 0.3,
-            'elasticity': 0.5,
-            'use_cloth_physics': True,
-            'cloth_stiffness': 0.8
-        },
-        'hats': {
-            'mass': 0.5,
-            'friction': 0.7,
-            'elasticity': 0.2,
-            'use_rigid_body': True
-        },
-        'shoes': {
-            'mass': 0.8,
-            'friction': 0.9,
-            'elasticity': 0.1,
-            'use_rigid_body': True
-        }
-    }
-
-def add_roblox_lod(obj, outfit_type):
-    """Add Level of Detail for Roblox optimization."""
-    lod_levels = {
-        'clothes': [
-            {'distance': 0, 'triangle_percent': 1.0},
-            {'distance': 10, 'triangle_percent': 0.75},
-            {'distance': 20, 'triangle_percent': 0.5}
-        ],
-        'hats': [
-            {'distance': 0, 'triangle_percent': 1.0},
-            {'distance': 15, 'triangle_percent': 0.6}
-        ],
-        'shoes': [
-            {'distance': 0, 'triangle_percent': 1.0},
-            {'distance': 12, 'triangle_percent': 0.7}
-        ]
-    }
-
-def add_roblox_surfaces(obj, outfit_type):
-    """Add Roblox-specific surface properties."""
-    surface_props = {
-        'clothes': {
-            'surface_type': 'SmoothNoOutlines',
-            'transparency': 0,
-            'reflectance': 0.1
-        },
-        'hats': {
-            'surface_type': 'Smooth',
-            'transparency': 0,
-            'reflectance': 0.2,
-            'cast_shadow': True
-        },
-        'shoes': {
-            'surface_type': 'Smooth',
-            'transparency': 0,
-            'reflectance': 0.15,
-            'cast_shadow': True
-        }
-    }
-
-def add_roblox_constraints(obj, outfit_type):
-    """Add Roblox-specific constraints and attachments."""
-    constraints = {
-        'clothes': {
-            'weld_parts': True,
-            'allow_rotation': False,
-            'preserve_position': True
-        },
-        'hats': {
-            'attachment_type': 'Weld',
-            'allow_rotation': True,
-            'max_angle': 45
-        },
-        'shoes': {
-            'attachment_type': 'Motor6D',
-            'allow_rotation': True,
-            'follow_animation': True
-        }
-    }
-
 def create_3d_model(params, input_path, output_path):
     try:
         # Log input information
+        logger.info("=== Starting 3D Model Creation ===")
+        logger.info(f"Input parameters: {json.dumps(params, indent=2)}")
         logger.info(f"Full input path: {input_path}")
-        logger.info(f"Original filename: {os.path.basename(input_path)}")
+        logger.info(f"Output path: {output_path}")
         
         # Extract parameters
         is_outfit = params.get('isOutfit', False)
         outfit_type = params.get('outfitType', None)
+        
+        logger.info(f"Is outfit: {is_outfit}")
+        logger.info(f"Outfit type: {outfit_type}")
         
         # Initialize the Masterpiece SDK client
         client = Masterpiecex(
@@ -980,29 +403,52 @@ def create_3d_model(params, input_path, output_path):
                     
                     # After downloading all files, process FBX for Roblox if needed
                     if is_outfit and outfit_type and 'fbx' in downloaded_files:
+                        logger.info("=== Starting Roblox FBX Processing ===")
                         fbx_path = os.path.join(output_dir, downloaded_files['fbx'])
-                        logger.info(f"Processing downloaded FBX for Roblox {outfit_type} requirements")
-                        processed_path = process_fbx_for_roblox(fbx_path, outfit_type)
+                        logger.info(f"Original FBX path: {fbx_path}")
+                        logger.info(f"Processing for outfit type: {outfit_type}")
                         
-                        if processed_path:
+                        if not os.path.exists(fbx_path):
+                            logger.error(f"Original FBX file not found at: {fbx_path}")
+                            raise FileNotFoundError(f"FBX file not found: {fbx_path}")
+                        
+                        processed_path = process_fbx_for_roblox(fbx_path, outfit_type)
+                        logger.info(f"Processed FBX path: {processed_path}")
+                        
+                        if processed_path and os.path.exists(processed_path):
                             # Add processed file to downloads
                             roblox_filename = f"{base_name}_{timestamp}_roblox.fbx"
-                            shutil.move(processed_path, os.path.join(output_dir, roblox_filename))
+                            target_path = os.path.join(output_dir, roblox_filename)
+                            logger.info(f"Moving processed file to: {target_path}")
+                            shutil.move(processed_path, target_path)
                             downloaded_files['fbx_roblox'] = roblox_filename
+                            logger.info(f"Successfully added Roblox FBX: {roblox_filename}")
                             
                             # Verify and log Roblox-specific metrics
-                            logger.info("Verifying Roblox requirements and performance metrics...")
-                            roblox_stats = verify_model_for_roblox(
-                                os.path.join(output_dir, roblox_filename),
-                                outfit_type
-                            )
+                            logger.info("=== Starting Roblox Validation ===")
+                            roblox_stats = verify_model_for_roblox(target_path, outfit_type)
                             if roblox_stats:
                                 stats_filename = f"{base_name}_{timestamp}_roblox_validation.json"
-                                with open(os.path.join(output_dir, stats_filename), 'w') as f:
+                                stats_path = os.path.join(output_dir, stats_filename)
+                                logger.info(f"Writing validation stats to: {stats_path}")
+                                with open(stats_path, 'w') as f:
                                     json.dump(roblox_stats, f, indent=2)
                                 downloaded_files['validation_stats'] = stats_filename
+                                logger.info("Validation stats saved successfully")
+                        else:
+                            logger.error("FBX processing failed - no processed file generated")
+                    else:
+                        logger.info("Skipping Roblox FBX processing - not an outfit or no FBX file available")
+                        if not is_outfit:
+                            logger.info("Reason: Not an outfit")
+                        elif not outfit_type:
+                            logger.info("Reason: No outfit type specified")
+                        elif 'fbx' not in downloaded_files:
+                            logger.info("Reason: No FBX file in downloaded files")
 
-                    # Return paths of all downloaded files
+                    logger.info("=== Conversion Summary ===")
+                    logger.info(f"Downloaded files: {json.dumps(downloaded_files, indent=2)}")
+                    
                     return {
                         'success': True,
                         'files': downloaded_files,
@@ -1017,6 +463,7 @@ def create_3d_model(params, input_path, output_path):
 
     except Exception as e:
         logger.error(f"Error during conversion: {str(e)}")
+        logger.error("Stack trace:", exc_info=True)
         return {
             'success': False,
             'error': str(e)

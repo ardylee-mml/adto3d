@@ -1,22 +1,27 @@
 # Dependencies
-/node_modules
-/.pnp
+node_modules/
+.pnp/
 .pnp.js
 
 # Testing
-/coverage
+coverage/
 
 # Next.js
-/.next/
-/out/
+.next/
+out/
 
 # Production
-/build
+build/
+dist/
 
 # Misc
 .DS_Store
 *.pem
-.env*
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
 # Debug
 npm-debug.log*
@@ -24,20 +29,20 @@ yarn-debug.log*
 yarn-error.log*
 
 # Local files
-/temp
-/public/output
-*.log
-
-# Python
+uploads/*
+!uploads/.gitkeep
+outputs/*
+!outputs/.gitkeep
+logs/*
+!logs/.gitkeep
+temp/
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
 
-# Environment files
-.env
-*.env
-.env.local
-.env.*.local
-.env.development
-.env.test
-.env.production
+# Virtual Environment
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/

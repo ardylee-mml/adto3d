@@ -23,6 +23,7 @@ import {
 import Image from 'next/image';
 import ModelViewer from './ModelViewer';
 import ModelEditor from './ModelEditor';
+import DownloadIcon from '@mui/icons-material/Download';
 
 // Define explicit types for all state
 interface OutfitType {
@@ -42,11 +43,12 @@ interface ImageValidation {
 }
 
 interface ModelUrls {
-  glb: string;
-  fbx: string;
-  usdz: string;
-  thumbnail: string;
-  [key: string]: string;
+  glb?: string;
+  fbx?: string;
+  fbx_roblox?: string;
+  usdz?: string;
+  thumbnail?: string;
+  [key: string]: string | undefined;
 }
 
 // Break down into smaller components
@@ -268,6 +270,122 @@ const ConversionProgress: React.FC<{
   </>
 );
 
+// Replace the entire ResultsSection component with a simpler version
+interface ResultsSectionProps {
+  modelUrls: {
+    glb?: string;
+    fbx?: string;
+    fbx_roblox?: string;
+    usdz?: string;
+    thumbnail?: string;
+  };
+  conversionId: string;
+  onNewConversion: () => void;
+  onDownload: (url: string, filename: string) => void;
+}
+
+const ResultsSection: React.FC<ResultsSectionProps> = ({ 
+  modelUrls, 
+  conversionId, 
+  onNewConversion, 
+  onDownload 
+}) => {
+  const handleDownload = (url: string | undefined, format: string) => {
+    if (url) {
+      // Extract the filename from the URL
+      const filename = url.split('/').pop() || `model.${format}`;
+      onDownload(url, filename);
+    }
+  };
+
+  return (
+    <Paper component="div" elevation={2} sx={{ p: 2 }}>
+      <Typography component="h2" variant="h6" gutterBottom>
+        Results
+      </Typography>
+
+      <div style={{ marginBottom: '24px' }}>
+        <Button
+          variant="contained"
+          color="primary"
+          onClick={onNewConversion}
+          fullWidth
+        >
+          Convert New Image
+        </Button>
+      </div>
+
+      {/* 3D Preview */}
+      <div style={{ marginTop: '2rem' }}>
+        <Typography variant="h6" gutterBottom>
+          3D Preview
+        </Typography>
+        {modelUrls.glb && (
+          <ModelViewer 
+            modelUrl={modelUrls.glb}
+            conversionId={conversionId}
+          />
+        )}
+      </div>
+
+      {/* Downloads */}
+      <div>
+        <Typography component="h3" variant="subtitle1" gutterBottom>
+          Download Files
+        </Typography>
+        <div style={{ marginTop: '32px', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+          {modelUrls.glb && (
+            <Button 
+              variant="contained" 
+              color="primary" 
+              startIcon={<DownloadIcon />}
+              onClick={() => handleDownload(modelUrls.glb, 'glb')}
+            >
+              Download GLB
+            </Button>
+          )}
+          {modelUrls.fbx && (
+            <Button 
+              variant="contained" 
+              color="primary" 
+              startIcon={<DownloadIcon />}
+              onClick={() => handleDownload(modelUrls.fbx, 'fbx')}
+            >
+              Download FBX
+            </Button>
+          )}
+          {modelUrls.fbx_roblox && (
+            <Button 
+              variant="contained" 
+              color="primary" 
+              startIcon={<DownloadIcon />}
+              onClick={() => handleDownload(modelUrls.fbx_roblox, 'fbx')}
+              sx={{ 
+                backgroundColor: '#00A2FF',
+                '&:hover': {
+                  backgroundColor: '#0081CC',
+                }
+              }}
+            >
+              Download Roblox FBX
+            </Button>
+          )}
+          {modelUrls.usdz && (
+            <Button 
+              variant="contained" 
+              color="primary" 
+              startIcon={<DownloadIcon />}
+              onClick={() => handleDownload(modelUrls.usdz, 'usdz')}
+            >
+              Download USDZ
+            </Button>
+          )}
+        </div>
+      </div>
+    </Paper>
+  );
+};
+
 // Main component
 export default function ImageUploader(): JSX.Element {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -290,6 +408,7 @@ export default function ImageUploader(): JSX.Element {
     message: null
   });
   const [showDownloadReminder, setShowDownloadReminder] = useState<boolean>(false);
+  const [conversionId, setConversionId] = useState<string>('');
 
   // Handle file selection
   const handleFileSelect = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -394,6 +513,7 @@ export default function ImageUploader(): JSX.Element {
       });
       setModelUrls(data.outputs);
       setProcessingStatus('');
+      setConversionId(data.conversionId);
     } catch (err) {
       console.error('Conversion error:', err);
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -420,6 +540,7 @@ export default function ImageUploader(): JSX.Element {
     });
     setOutfitType({ isOutfit: false, type: null });
     setProcessingStatus('');
+    setConversionId('');
   };
 
   // Handle new conversion
@@ -431,6 +552,35 @@ export default function ImageUploader(): JSX.Element {
     }
   };
 
+  // Handle file download
+  const handleDownload = async (url: string, filename: string) => {
+    try {
+      // Use fetch with blob response type
+      const response = await fetch(url);
+      const blob = await response.blob();
+      
+      // Create a blob URL
+      const blobUrl = window.URL.createObjectURL(blob);
+      
+      // Create a temporary anchor element
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.setAttribute('download', filename);
+      
+      // Append to the document, click it, and remove it
+      document.body.appendChild(link);
+      link.click();
+      
+      // Clean up
+      window.URL.revokeObjectURL(blobUrl);
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error('Download failed:', error);
+      alert('Failed to download the file. Please try again.');
+    }
+  };
+
+  // Update the renderContent function
   const renderContent = (): JSX.Element => (
     <Box component="div" sx={{ maxWidth: 1200, mx: 'auto', p: 2 }}>
       <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
@@ -500,59 +650,12 @@ export default function ImageUploader(): JSX.Element {
 
           <Grid item xs={12} md={8}>
             {modelUrls ? (
-              <Paper component="div" elevation={2} sx={{ p: 2 }}>
-                <Typography component="h2" variant="h6" gutterBottom>
-                  Results
-                </Typography>
-
-                <Box component="div" sx={{ mb: 3 }}>
-                  <Button
-                    variant="contained"
-                    color="primary"
-                    onClick={handleNewConversion}
-                    fullWidth
-                  >
-                    Convert New Image
-                  </Button>
-                </Box>
-
-                <Box component="div" sx={{ mb: 4 }}>
-                  <Typography component="h3" variant="subtitle1" gutterBottom>
-                    3D Preview
-                  </Typography>
-                  <ModelViewer 
-                    glbUrl={modelUrls.glb}
-                    fbxUrl={modelUrls.fbx}
-                    isOutfit={outfitType.isOutfit}
-                    outfitType={outfitType.type || undefined}
-                  />
-                </Box>
-
-                <Box component="div">
-                  <Typography component="h3" variant="subtitle1" gutterBottom>
-                    Download Files
-                  </Typography>
-                  <Grid container spacing={2}>
-                    {Object.entries(modelUrls).map(([format, url]) => (
-                      <Grid item xs={6} sm={3} key={format}>
-                        <a
-                          style={{
-                            textDecoration: 'none',
-                            width: '100%',
-                            display: 'block'
-                          }}
-                          href={url}
-                          download
-                        >
-                          <Button variant="outlined" fullWidth>
-                            Download {format.toUpperCase()}
-                          </Button>
-                        </a>
-                      </Grid>
-                    ))}
-                  </Grid>
-                </Box>
-              </Paper>
+              <ResultsSection 
+                modelUrls={modelUrls}
+                conversionId={conversionId}
+                onNewConversion={handleNewConversion}
+                onDownload={handleDownload}
+              />
             ) : (
               <Paper 
                 component="div"
